@@ -877,11 +877,11 @@ export const swarm_evaluation_prompt = tool({
 // ============================================================================
 
 export const swarmTools = {
-  "swarm:decompose": swarm_decompose,
-  "swarm:validate_decomposition": swarm_validate_decomposition,
-  "swarm:status": swarm_status,
-  "swarm:progress": swarm_progress,
-  "swarm:complete": swarm_complete,
-  "swarm:subtask_prompt": swarm_subtask_prompt,
-  "swarm:evaluation_prompt": swarm_evaluation_prompt,
+  "swarm_decompose": swarm_decompose,
+  "swarm_validate_decomposition": swarm_validate_decomposition,
+  "swarm_status": swarm_status,
+  "swarm_progress": swarm_progress,
+  "swarm_complete": swarm_complete,
+  "swarm_subtask_prompt": swarm_subtask_prompt,
+  "swarm_evaluation_prompt": swarm_evaluation_prompt,
 };

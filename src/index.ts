@@ -133,7 +133,7 @@ export const SwarmPlugin: Plugin = async (
       const toolName = input.tool;
 
       // Track Agent Mail state for cleanup
-      if (toolName === "agent-mail:init" && output.output) {
+      if (toolName === "agentmail_init" && output.output) {
         try {
           const result = JSON.parse(output.output);
           if (result.agent) {
@@ -151,7 +151,7 @@ export const SwarmPlugin: Plugin = async (
 
       // Track reservations from output
       if (
-        toolName === "agent-mail:reserve" &&
+        toolName === "agentmail_reserve" &&
         output.output &&
         activeAgentMailState
       ) {
@@ -164,7 +164,7 @@ export const SwarmPlugin: Plugin = async (
       }
 
       // Auto-release after swarm:complete
-      if (toolName === "swarm:complete" && activeAgentMailState) {
+      if (toolName === "swarm_complete" && activeAgentMailState) {
         await releaseReservations();
         console.log(
           "[swarm-plugin] Auto-released reservations after swarm:complete",
@@ -172,7 +172,7 @@ export const SwarmPlugin: Plugin = async (
       }
 
       // Auto-sync beads after closing
-      if (toolName === "beads:close") {
+      if (toolName === "beads_close") {
         // Trigger async sync without blocking - fire and forget
         void $`bd sync`
           .quiet()

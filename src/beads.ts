@@ -582,13 +582,13 @@ export const beads_link_thread = tool({
 // ============================================================================
 
 export const beadsTools = {
-  "beads:create": beads_create,
-  "beads:create_epic": beads_create_epic,
-  "beads:query": beads_query,
-  "beads:update": beads_update,
-  "beads:close": beads_close,
-  "beads:start": beads_start,
-  "beads:ready": beads_ready,
-  "beads:sync": beads_sync,
-  "beads:link_thread": beads_link_thread,
+  "beads_create": beads_create,
+  "beads_create_epic": beads_create_epic,
+  "beads_query": beads_query,
+  "beads_update": beads_update,
+  "beads_close": beads_close,
+  "beads_start": beads_start,
+  "beads_ready": beads_ready,
+  "beads_sync": beads_sync,
+  "beads_link_thread": beads_link_thread,
 };

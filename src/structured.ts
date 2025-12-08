@@ -700,9 +700,9 @@ export { extractJsonFromText, formatZodErrors, getSchemaByName };
 // ============================================================================
 
 export const structuredTools = {
-  "structured:extract_json": structured_extract_json,
-  "structured:validate": structured_validate,
-  "structured:parse_evaluation": structured_parse_evaluation,
-  "structured:parse_decomposition": structured_parse_decomposition,
-  "structured:parse_bead_tree": structured_parse_bead_tree,
+  "structured_extract_json": structured_extract_json,
+  "structured_validate": structured_validate,
+  "structured_parse_evaluation": structured_parse_evaluation,
+  "structured_parse_decomposition": structured_parse_decomposition,
+  "structured_parse_bead_tree": structured_parse_bead_tree,
 };

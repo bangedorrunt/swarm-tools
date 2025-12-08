@@ -586,16 +586,16 @@ export const agentmail_health = tool({
 // ============================================================================
 
 export const agentMailTools = {
-  "agent-mail:init": agentmail_init,
-  "agent-mail:send": agentmail_send,
-  "agent-mail:inbox": agentmail_inbox,
-  "agent-mail:read_message": agentmail_read_message,
-  "agent-mail:summarize_thread": agentmail_summarize_thread,
-  "agent-mail:reserve": agentmail_reserve,
-  "agent-mail:release": agentmail_release,
-  "agent-mail:ack": agentmail_ack,
-  "agent-mail:search": agentmail_search,
-  "agent-mail:health": agentmail_health,
+  "agentmail_init": agentmail_init,
+  "agentmail_send": agentmail_send,
+  "agentmail_inbox": agentmail_inbox,
+  "agentmail_read_message": agentmail_read_message,
+  "agentmail_summarize_thread": agentmail_summarize_thread,
+  "agentmail_reserve": agentmail_reserve,
+  "agentmail_release": agentmail_release,
+  "agentmail_ack": agentmail_ack,
+  "agentmail_search": agentmail_search,
+  "agentmail_health": agentmail_health,
 };
 
 // ============================================================================
