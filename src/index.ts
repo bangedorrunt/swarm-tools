@@ -219,12 +219,19 @@ export * from "./beads";
  *
  * Includes:
  * - agentMailTools - All agent mail tool definitions
- * - Individual tool exports (agentmail_init, agentmail_send, etc.)
  * - AgentMailError, FileReservationConflictError - Error classes
  * - AgentMailState - Session state type
- * - Utility exports (mcpCall, requireState, setState)
+ *
+ * NOTE: We selectively export to avoid exporting constants like AGENT_MAIL_URL
+ * which would confuse the plugin loader (it tries to call all exports as functions)
  */
-export * from "./agent-mail";
+export {
+  agentMailTools,
+  AgentMailError,
+  AgentMailNotInitializedError,
+  FileReservationConflictError,
+  type AgentMailState,
+} from "./agent-mail";
 
 /**
  * Re-export structured module
