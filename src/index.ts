@@ -238,16 +238,30 @@ export {
  *
  * Includes:
  * - structuredTools - Structured output parsing tools
- * - StructuredValidationError - Error class for validation failures
- * - extractJSON, validateStructured - Utility functions
+ * - Utility functions for JSON extraction
  */
-export * from "./structured";
+export {
+  structuredTools,
+  extractJsonFromText,
+  formatZodErrors,
+  getSchemaByName,
+} from "./structured";
 
 /**
  * Re-export swarm module
  *
  * Includes:
  * - swarmTools - Swarm orchestration tools
- * - Prompt templates (DECOMPOSITION_PROMPT, SUBTASK_PROMPT, etc.)
+ * - SwarmError, DecompositionError - Error classes
+ * - formatSubtaskPrompt, formatEvaluationPrompt - Prompt helpers
+ *
+ * NOTE: Prompt template strings (DECOMPOSITION_PROMPT, etc.) are NOT exported
+ * to avoid confusing the plugin loader which tries to call all exports as functions
  */
-export * from "./swarm";
+export {
+  swarmTools,
+  SwarmError,
+  DecompositionError,
+  formatSubtaskPrompt,
+  formatEvaluationPrompt,
+} from "./swarm";
