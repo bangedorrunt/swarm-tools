@@ -636,13 +636,13 @@ async function setup() {
   // Check if already configured FIRST
   const configDir = join(homedir(), ".config", "opencode");
   const pluginDir = join(configDir, "plugin");
-  const commandsDir = join(configDir, "commands");
-  const agentsDir = join(configDir, "agents");
+  const commandDir = join(configDir, "command");
+  const agentDir = join(configDir, "agent");
 
   const pluginPath = join(pluginDir, "swarm.ts");
-  const commandPath = join(commandsDir, "swarm.md");
-  const plannerAgentPath = join(agentsDir, "swarm-planner.md");
-  const workerAgentPath = join(agentsDir, "swarm-worker.md");
+  const commandPath = join(commandDir, "swarm.md");
+  const plannerAgentPath = join(agentDir, "swarm-planner.md");
+  const workerAgentPath = join(agentDir, "swarm-worker.md");
 
   const existingFiles = [
     pluginPath,
@@ -955,7 +955,7 @@ async function setup() {
   p.log.step("Setting up OpenCode integration...");
 
   // Create directories if needed
-  for (const dir of [pluginDir, commandsDir, agentsDir]) {
+  for (const dir of [pluginDir, commandDir, agentDir]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
@@ -1081,9 +1081,9 @@ async function version() {
 function config() {
   const configDir = join(homedir(), ".config", "opencode");
   const pluginPath = join(configDir, "plugin", "swarm.ts");
-  const commandPath = join(configDir, "commands", "swarm.md");
-  const plannerAgentPath = join(configDir, "agents", "swarm-planner.md");
-  const workerAgentPath = join(configDir, "agents", "swarm-worker.md");
+  const commandPath = join(configDir, "command", "swarm.md");
+  const plannerAgentPath = join(configDir, "agent", "swarm-planner.md");
+  const workerAgentPath = join(configDir, "agent", "swarm-worker.md");
 
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
@@ -1189,9 +1189,9 @@ ${cyan("Usage in OpenCode:")}
 
 ${cyan("Customization:")}
   Edit the generated files to customize behavior:
-  ${dim("~/.config/opencode/commands/swarm.md")}      - /swarm command prompt
-  ${dim("~/.config/opencode/agents/swarm-planner.md")} - @swarm-planner (coordinator)
-  ${dim("~/.config/opencode/agents/swarm-worker.md")}  - @swarm-worker (fast executor)
+  ${dim("~/.config/opencode/command/swarm.md")}       - /swarm command prompt
+  ${dim("~/.config/opencode/agent/swarm-planner.md")}  - @swarm-planner (coordinator)
+  ${dim("~/.config/opencode/agent/swarm-worker.md")}   - @swarm-worker (fast executor)
   ${dim("~/.config/opencode/plugin/swarm.ts")}        - Plugin loader
 
 ${dim("Docs: https://github.com/joelhooks/opencode-swarm-plugin")}

@@ -45,9 +45,9 @@ The setup wizard handles everything:
 │
 ◇  Setting up OpenCode integration...
 │
-◆  Plugin: ~/.config/opencode/plugins/swarm.ts
-◆  Command: ~/.config/opencode/commands/swarm.md
-◆  Agent: ~/.config/opencode/agents/swarm-planner.md
+◆  Plugin: ~/.config/opencode/plugin/swarm.ts
+◆  Command: ~/.config/opencode/command/swarm.md
+◆  Agent: ~/.config/opencode/agent/swarm-planner.md
 │
 └  Setup complete!
 ```
@@ -90,18 +90,18 @@ Run `swarm config` to see your config file paths:
 
 ```
 🔌 Plugin loader
-   ~/.config/opencode/plugins/swarm.ts
+   ~/.config/opencode/plugin/swarm.ts
 
 📜 /swarm command prompt
-   ~/.config/opencode/commands/swarm.md
+   ~/.config/opencode/command/swarm.md
 
 🤖 @swarm-planner agent
-   ~/.config/opencode/agents/swarm-planner.md
+   ~/.config/opencode/agent/swarm-planner.md
 ```
 
 ### /swarm Command
 
-The `/swarm` command is defined in `~/.config/opencode/commands/swarm.md`:
+The `/swarm` command is defined in `~/.config/opencode/command/swarm.md`:
 
 ```markdown
 ---
@@ -138,7 +138,7 @@ Begin decomposition now.
 
 ### @swarm-planner Agent
 
-The `@swarm-planner` agent is defined in `~/.config/opencode/agents/swarm-planner.md`:
+The `@swarm-planner` agent is defined in `~/.config/opencode/agent/swarm-planner.md`:
 
 ````markdown
 ---
