@@ -26,7 +26,7 @@
     "release": "npm run build && npm version patch && git push && npm run publish:otp",
     "release:minor": "npm run build && npm version minor && git push && npm run publish:otp",
     "release:major": "npm run build && npm version major && git push && npm run publish:otp",
-    "publish:otp": "source .env && npm publish --otp=$(op item get \"$NPM_1P_ITEM\" --otp)"
+    "publish:otp": "bash -c 'source .env && npm publish --otp=$(op item get $NPM_1P_ITEM --otp)'"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
