@@ -20,39 +20,62 @@ This plugin provides intelligent, self-improving tools for multi-agent workflows
 - **Graceful degradation** - Works with whatever tools are available, degrades features when tools missing
 - **Swarm discipline** - Enforces beads tracking, aggressive planning, and agent communication
 
-## Quick Start (macOS)
+## Quick Start
 
-Run the setup script to check and install dependencies:
-
-```bash
-# Install the package
-npm install opencode-swarm-plugin
-
-# Run setup (checks deps, copies plugin + examples)
-npx opencode-swarm-setup
-```
-
-Or manually:
+### 1. Install Dependencies
 
 ```bash
-# 1. Install OpenCode
+# OpenCode (plugin host)
 brew install sst/tap/opencode
 
-# 2. Install Beads CLI
+# Beads CLI (issue tracking)
 npm install -g @joelhooks/beads
+```
 
-# 3. Copy plugin to OpenCode
-mkdir -p ~/.config/opencode/plugins
-cp node_modules/opencode-swarm-plugin/dist/plugin.js ~/.config/opencode/plugins/swarm.js
+### 2. Install Plugin
 
-# 4. Copy examples (optional but recommended)
+```bash
+npm install opencode-swarm-plugin
+```
+
+### 3. Create Plugin Wrapper
+
+Create a file at `~/.config/opencode/plugins/swarm.ts`:
+
+```ts
+import { SwarmPlugin } from "opencode-swarm-plugin";
+export default SwarmPlugin;
+```
+
+That's it! OpenCode will load the plugin automatically.
+
+### 4. Copy Examples (Recommended)
+
+```bash
+# Create directories
 mkdir -p ~/.config/opencode/commands ~/.config/opencode/agents
-cp node_modules/opencode-swarm-plugin/examples/commands/swarm.md ~/.config/opencode/commands/
-cp node_modules/opencode-swarm-plugin/examples/agents/swarm-planner.md ~/.config/opencode/agents/
 
-# 5. Initialize beads in your project
+# Copy /swarm command
+cp node_modules/opencode-swarm-plugin/examples/commands/swarm.md ~/.config/opencode/commands/
+
+# Copy @swarm-planner agent
+cp node_modules/opencode-swarm-plugin/examples/agents/swarm-planner.md ~/.config/opencode/agents/
+```
+
+### 5. Initialize Beads in Your Project
+
+```bash
 cd your-project
 bd init
+```
+
+### Alternative: Direct Copy (No Wrapper)
+
+If you prefer not to use the wrapper pattern:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+cp node_modules/opencode-swarm-plugin/dist/plugin.js ~/.config/opencode/plugins/swarm.js
 ```
 
 ## Dependencies
@@ -103,16 +126,25 @@ bun add opencode-swarm-plugin
 pnpm add opencode-swarm-plugin
 ```
 
-### Plugin Setup
+### Plugin Setup (Wrapper Pattern)
 
-Copy the plugin to OpenCode's plugins directory:
+Create `~/.config/opencode/plugins/swarm.ts`:
+
+```ts
+import { SwarmPlugin } from "opencode-swarm-plugin";
+export default SwarmPlugin;
+```
+
+OpenCode runs on Bun and loads TypeScript directly - no build step needed.
+
+### Plugin Setup (Direct Copy)
+
+Alternatively, copy the pre-built bundle:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
 cp node_modules/opencode-swarm-plugin/dist/plugin.js ~/.config/opencode/plugins/swarm.js
 ```
-
-Plugins are automatically loaded from `~/.config/opencode/plugins/` - no config file changes needed.
 
 ### Example Files
 
