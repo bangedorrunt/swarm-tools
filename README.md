@@ -23,8 +23,23 @@ Break complex tasks into parallel subtasks, spawn agents to work on them, and co
 # OpenCode (plugin host)
 brew install sst/tap/opencode
 
-# Beads CLI (issue tracking) - https://github.com/steveyegge/beads
+# Beads CLI (issue tracking)
 go install github.com/steveyegge/beads/cmd/bd@latest
+
+# Agent Mail (multi-agent coordination)
+go install github.com/joelhooks/agent-mail/cmd/agent-mail@latest
+
+# CASS (cross-agent session search)
+# See: https://github.com/Dicklesworthstone/cass
+
+# UBS (bug scanner)
+# See: https://github.com/joelhooks/ubs
+
+# semantic-memory (learning persistence)
+npm install -g semantic-memory
+
+# Redis (rate limiting - optional, falls back to SQLite)
+brew install redis
 ```
 
 ### 2. Install Plugin
@@ -142,34 +157,33 @@ bd init
 
 ## Dependencies
 
-### Required
+| Dependency                                                      | Purpose                               | Install                                                            | Required |
+| --------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------ | -------- |
+| [OpenCode](https://opencode.ai)                                 | Plugin host                           | `brew install sst/tap/opencode`                                    | Yes      |
+| [Beads](https://github.com/steveyegge/beads)                    | Git-backed issue tracking             | `go install github.com/steveyegge/beads/cmd/bd@latest`             | Yes      |
+| [Agent Mail](https://github.com/joelhooks/agent-mail)           | Multi-agent coordination              | `go install github.com/joelhooks/agent-mail/cmd/agent-mail@latest` | No\*     |
+| [CASS](https://github.com/Dicklesworthstone/cass)               | Historical context from past sessions | See repo                                                           | No\*     |
+| [UBS](https://github.com/joelhooks/ubs)                         | Pre-completion bug scanning           | See repo                                                           | No\*     |
+| [semantic-memory](https://github.com/joelhooks/semantic-memory) | Learning persistence                  | `npm install -g semantic-memory`                                   | No\*     |
+| [Redis](https://redis.io)                                       | Rate limiting                         | `brew install redis`                                               | No\*     |
 
-| Dependency                                   | Purpose                   | Install                                                |
-| -------------------------------------------- | ------------------------- | ------------------------------------------------------ |
-| [OpenCode](https://opencode.ai)              | Plugin host               | `brew install sst/tap/opencode`                        |
-| [Beads](https://github.com/steveyegge/beads) | Git-backed issue tracking | `go install github.com/steveyegge/beads/cmd/bd@latest` |
-
-### Optional (Graceful Degradation)
-
-The plugin works without these, with reduced functionality:
-
-| Dependency                                            | Purpose                  | Without It                        | Install              |
-| ----------------------------------------------------- | ------------------------ | --------------------------------- | -------------------- |
-| [Agent Mail](https://github.com/joelhooks/agent-mail) | Multi-agent coordination | No file reservations or messaging | See repo             |
-| [CASS](https://github.com/Dicklesworthstone/cass)     | Historical context       | No "similar past tasks"           | See repo             |
-| [UBS](https://github.com/joelhooks/ubs)               | Bug scanning             | No pre-completion validation      | See repo             |
-| Redis                                                 | Rate limiting            | Falls back to SQLite              | `brew install redis` |
+\*The plugin gracefully degrades without optional dependencies.
 
 > **Tip**: Use [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) for a web UI to visualize your beads.
 
 ### Verify Installation
 
 ```bash
-# Check everything at once
-opencode --version && bd --version && echo "Ready!"
+# Required
+opencode --version
+bd --version
 
-# Optional: Check Agent Mail
-curl -s http://127.0.0.1:8765/health/liveness && echo "Agent Mail running"
+# Optional - check what's available
+agent-mail --version        # Multi-agent coordination
+cass health                 # Session search
+ubs doctor                  # Bug scanner
+semantic-memory stats       # Learning persistence
+redis-cli ping              # Rate limiting
 ```
 
 ## Tools Reference
