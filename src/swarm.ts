@@ -31,9 +31,13 @@ import {
   DecompositionStrategySchema,
   scoreImplicitFeedback,
   outcomeToFeedback,
+  ErrorAccumulator,
+  ErrorEntrySchema,
   type OutcomeSignals,
   type ScoredOutcome,
   type FeedbackEvent,
+  type ErrorEntry,
+  type ErrorType,
   type DecompositionStrategy as LearningDecompositionStrategy,
   DEFAULT_LEARNING_CONFIG,
 } from "./learning";
@@ -604,6 +608,8 @@ Begin work on your subtask now.`;
  *
  * This is a cleaner version of SUBTASK_PROMPT that's easier to parse.
  * Agents MUST use Agent Mail for communication and beads for tracking.
+ *
+ * Supports {error_context} placeholder for retry prompts.
  */
 export const SUBTASK_PROMPT_V2 = `You are a swarm agent working on: **{subtask_title}**
 
@@ -621,6 +627,10 @@ Only modify these files. Need others? Message the coordinator.
 
 ## Context
 {shared_context}
+
+{compressed_context}
+
+{error_context}
 
 ## MANDATORY: Use These Tools
 
@@ -663,11 +673,19 @@ export function formatSubtaskPromptV2(params: {
   subtask_description: string;
   files: string[];
   shared_context?: string;
+  compressed_context?: string;
+  error_context?: string;
 }): string {
   const fileList =
     params.files.length > 0
       ? params.files.map((f) => `- \`${f}\``).join("\n")
       : "(no specific files - use judgment)";
+
+  const compressedSection = params.compressed_context
+    ? params.compressed_context
+    : "";
+
+  const errorSection = params.error_context ? params.error_context : "";
 
   return SUBTASK_PROMPT_V2.replace(/{bead_id}/g, params.bead_id)
     .replace(/{epic_id}/g, params.epic_id)
@@ -677,7 +695,9 @@ export function formatSubtaskPromptV2(params: {
       params.subtask_description || "(see title)",
     )
     .replace("{file_list}", fileList)
-    .replace("{shared_context}", params.shared_context || "(none)");
+    .replace("{shared_context}", params.shared_context || "(none)")
+    .replace("{compressed_context}", compressedSection)
+    .replace("{error_context}", errorSection);
 }
 
 /**
@@ -1906,6 +1926,9 @@ export const swarm_record_outcome = tool({
       DEFAULT_LEARNING_CONFIG,
     );
 
+    // Get error patterns from accumulator
+    const errorStats = await globalErrorAccumulator.getErrorStats(args.bead_id);
+
     // Generate feedback events for each criterion
     const criteriaToScore = args.criteria ?? [
       "type_safe",
@@ -1919,6 +1942,14 @@ export const swarm_record_outcome = tool({
       if (args.strategy) {
         event.context =
           `${event.context || ""} [strategy: ${args.strategy}]`.trim();
+      }
+      // Include error patterns in feedback context
+      if (errorStats.total > 0) {
+        const errorSummary = Object.entries(errorStats.by_type)
+          .map(([type, count]) => `${type}:${count}`)
+          .join(", ");
+        event.context =
+          `${event.context || ""} [errors: ${errorSummary}]`.trim();
       }
       return event;
     });
@@ -1935,6 +1966,7 @@ export const swarm_record_outcome = tool({
           },
         },
         feedback_events: feedbackEvents,
+        error_patterns: errorStats,
         summary: {
           feedback_type: scored.type,
           duration_seconds: Math.round(args.duration_ms / 1000),
@@ -1942,6 +1974,8 @@ export const swarm_record_outcome = tool({
           retry_count: args.retry_count ?? 0,
           success: args.success,
           strategy: args.strategy,
+          accumulated_errors: errorStats.total,
+          unresolved_errors: errorStats.unresolved,
         },
         note: "Feedback events should be stored for criterion weight calculation. Use learning.ts functions to apply weights.",
       },
@@ -2222,6 +2256,144 @@ export const swarm_evaluation_prompt = tool({
   },
 });
 
+// ============================================================================
+// Error Accumulator
+// ============================================================================
+
+/**
+ * Global error accumulator for tracking errors across subtasks
+ *
+ * This is a session-level singleton that accumulates errors during
+ * swarm execution for feeding into retry prompts.
+ */
+const globalErrorAccumulator = new ErrorAccumulator();
+
+/**
+ * Record an error during subtask execution
+ *
+ * Implements pattern from "Patterns for Building AI Agents" p.40:
+ * "Good agents examine and correct errors when something goes wrong"
+ *
+ * Errors are accumulated and can be fed into retry prompts to help
+ * agents learn from past failures.
+ */
+export const swarm_accumulate_error = tool({
+  description:
+    "Record an error during subtask execution. Errors feed into retry prompts.",
+  args: {
+    bead_id: tool.schema.string().describe("Bead ID where error occurred"),
+    error_type: tool.schema
+      .enum(["validation", "timeout", "conflict", "tool_failure", "unknown"])
+      .describe("Category of error"),
+    message: tool.schema.string().describe("Human-readable error message"),
+    stack_trace: tool.schema
+      .string()
+      .optional()
+      .describe("Stack trace for debugging"),
+    tool_name: tool.schema.string().optional().describe("Tool that failed"),
+    context: tool.schema
+      .string()
+      .optional()
+      .describe("What was happening when error occurred"),
+  },
+  async execute(args) {
+    const entry = await globalErrorAccumulator.recordError(
+      args.bead_id,
+      args.error_type as ErrorType,
+      args.message,
+      {
+        stack_trace: args.stack_trace,
+        tool_name: args.tool_name,
+        context: args.context,
+      },
+    );
+
+    return JSON.stringify(
+      {
+        success: true,
+        error_id: entry.id,
+        bead_id: entry.bead_id,
+        error_type: entry.error_type,
+        message: entry.message,
+        timestamp: entry.timestamp,
+        note: "Error recorded for retry context. Use swarm_get_error_context to retrieve accumulated errors.",
+      },
+      null,
+      2,
+    );
+  },
+});
+
+/**
+ * Get accumulated errors for a bead to feed into retry prompts
+ *
+ * Returns formatted error context that can be injected into retry prompts
+ * to help agents learn from past failures.
+ */
+export const swarm_get_error_context = tool({
+  description:
+    "Get accumulated errors for a bead. Returns formatted context for retry prompts.",
+  args: {
+    bead_id: tool.schema.string().describe("Bead ID to get errors for"),
+    include_resolved: tool.schema
+      .boolean()
+      .optional()
+      .describe("Include resolved errors (default: false)"),
+  },
+  async execute(args) {
+    const errorContext = await globalErrorAccumulator.getErrorContext(
+      args.bead_id,
+      args.include_resolved ?? false,
+    );
+
+    const stats = await globalErrorAccumulator.getErrorStats(args.bead_id);
+
+    return JSON.stringify(
+      {
+        bead_id: args.bead_id,
+        error_context: errorContext,
+        stats: {
+          total_errors: stats.total,
+          unresolved: stats.unresolved,
+          by_type: stats.by_type,
+        },
+        has_errors: errorContext.length > 0,
+        usage:
+          "Inject error_context into retry prompt using {error_context} placeholder",
+      },
+      null,
+      2,
+    );
+  },
+});
+
+/**
+ * Mark an error as resolved
+ *
+ * Call this after an agent successfully addresses an error to update
+ * the accumulator state.
+ */
+export const swarm_resolve_error = tool({
+  description:
+    "Mark an error as resolved after fixing it. Updates error accumulator state.",
+  args: {
+    error_id: tool.schema.string().describe("Error ID to mark as resolved"),
+  },
+  async execute(args) {
+    await globalErrorAccumulator.resolveError(args.error_id);
+
+    return JSON.stringify(
+      {
+        success: true,
+        error_id: args.error_id,
+        resolved: true,
+      },
+      null,
+      2,
+    );
+  },
+});
+
 /**
  * Initialize swarm and check tool availability
  *
@@ -2328,4 +2500,7 @@ export const swarmTools = {
   swarm_spawn_subtask: swarm_spawn_subtask,
   swarm_complete_subtask: swarm_complete_subtask,
   swarm_evaluation_prompt: swarm_evaluation_prompt,
+  swarm_accumulate_error: swarm_accumulate_error,
+  swarm_get_error_context: swarm_get_error_context,
+  swarm_resolve_error: swarm_resolve_error,
 };

@@ -38,10 +38,10 @@ const RETRY_CONFIG = {
 
 // Server recovery configuration
 const RECOVERY_CONFIG = {
-  /** Max consecutive failures before attempting restart */
-  failureThreshold: 2,
-  /** Cooldown between restart attempts (ms) */
-  restartCooldownMs: 30000,
+  /** Max consecutive failures before attempting restart (1 = restart on first "unexpected error") */
+  failureThreshold: 1,
+  /** Cooldown between restart attempts (ms) - 10 seconds */
+  restartCooldownMs: 10000,
   /** Whether auto-restart is enabled */
   enabled: process.env.OPENCODE_AGENT_MAIL_AUTO_RESTART !== "false",
 };
@@ -880,6 +880,29 @@ export const agentmail_init = tool({
       );
     }
 
+    // Proactive health check - if server is unhealthy, try restart before proceeding
+    const functional = await isServerFunctional();
+    if (!functional) {
+      console.warn(
+        "[agent-mail] Server unhealthy on init, attempting restart...",
+      );
+      const restarted = await restartServer();
+      if (!restarted) {
+        return JSON.stringify(
+          {
+            error: "Agent Mail server unhealthy and restart failed",
+            available: false,
+            hint: "Manually restart Agent Mail: pkill -f agent-mail && agent-mail serve",
+            fallback: "Swarm will continue without multi-agent coordination.",
+          },
+          null,
+          2,
+        );
+      }
+      // Clear cache after restart
+      agentMailAvailable = null;
+    }
+
     // 1. Ensure project exists
     const project = await mcpCall<ProjectInfo>("ensure_project", {
       human_key: args.project_path,
@@ -1270,12 +1293,84 @@ export const agentmail_health = tool({
     try {
       const response = await fetch(`${AGENT_MAIL_URL}/health/liveness`);
       if (response.ok) {
-        return "Agent Mail is running";
+        // Also check if MCP is functional
+        const functional = await isServerFunctional();
+        if (functional) {
+          return "Agent Mail is running and functional";
+        }
+        return "Agent Mail health OK but MCP not responding - consider restart";
       }
       return `Agent Mail returned status ${response.status}`;
     } catch (error) {
       return `Agent Mail not reachable: ${error instanceof Error ? error.message : String(error)}`;
     }
+  },
+});
+
+/**
+ * Manually restart Agent Mail server
+ *
+ * Use when server is in bad state (health OK but MCP failing).
+ * This kills the existing process and starts a fresh one.
+ */
+export const agentmail_restart = tool({
+  description:
+    "Manually restart Agent Mail server (use when getting 'unexpected error')",
+  args: {
+    force: tool.schema
+      .boolean()
+      .optional()
+      .describe(
+        "Force restart even if server appears healthy (default: false)",
+      ),
+  },
+  async execute(args) {
+    // Check if restart is needed
+    if (!args.force) {
+      const functional = await isServerFunctional();
+      if (functional) {
+        return JSON.stringify(
+          {
+            restarted: false,
+            reason: "Server is functional, no restart needed",
+            hint: "Use force=true to restart anyway",
+          },
+          null,
+          2,
+        );
+      }
+    }
+
+    // Attempt restart
+    console.warn("[agent-mail] Manual restart requested...");
+    const success = await restartServer();
+
+    // Clear caches
+    agentMailAvailable = null;
+    consecutiveFailures = 0;
+
+    if (success) {
+      return JSON.stringify(
+        {
+          restarted: true,
+          success: true,
+          message: "Agent Mail server restarted successfully",
+        },
+        null,
+        2,
+      );
+    }
+
+    return JSON.stringify(
+      {
+        restarted: true,
+        success: false,
+        error: "Restart attempted but server did not come back up",
+        hint: "Check server logs or manually start: agent-mail serve",
+      },
+      null,
+      2,
+    );
   },
 });
 
@@ -1294,6 +1389,7 @@ export const agentMailTools = {
   agentmail_ack: agentmail_ack,
   agentmail_search: agentmail_search,
   agentmail_health: agentmail_health,
+  agentmail_restart: agentmail_restart,
 };
 
 // ============================================================================

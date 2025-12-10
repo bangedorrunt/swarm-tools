@@ -65,6 +65,46 @@ export const CriterionWeightSchema = z.object({
 export type CriterionWeight = z.infer<typeof CriterionWeightSchema>;
 
 /**
+ * Error types that can occur during subtask execution
+ */
+export const ErrorTypeSchema = z.enum([
+  "validation",
+  "timeout",
+  "conflict",
+  "tool_failure",
+  "unknown",
+]);
+export type ErrorType = z.infer<typeof ErrorTypeSchema>;
+
+/**
+ * An error entry in the error accumulator
+ *
+ * Errors are accumulated during subtask execution and can be fed
+ * into retry prompts to help agents learn from past failures.
+ */
+export const ErrorEntrySchema = z.object({
+  /** Unique ID for this error entry */
+  id: z.string(),
+  /** The bead ID this error relates to */
+  bead_id: z.string(),
+  /** Type of error encountered */
+  error_type: ErrorTypeSchema,
+  /** Human-readable error message */
+  message: z.string(),
+  /** Optional stack trace for debugging */
+  stack_trace: z.string().optional(),
+  /** Tool that failed, if applicable */
+  tool_name: z.string().optional(),
+  /** When this error occurred */
+  timestamp: z.string(), // ISO-8601
+  /** Whether this error was resolved */
+  resolved: z.boolean().default(false),
+  /** Context about what was happening when error occurred */
+  context: z.string().optional(),
+});
+export type ErrorEntry = z.infer<typeof ErrorEntrySchema>;
+
+/**
  * Decomposition strategies for tracking which approach was used
  */
 export const DecompositionStrategySchema = z.enum([
@@ -438,6 +478,241 @@ export class InMemoryFeedbackStorage implements FeedbackStorage {
 }
 
 // ============================================================================
+// Error Accumulator
+// ============================================================================
+
+/**
+ * Storage interface for error entries
+ *
+ * Similar to FeedbackStorage but for tracking errors during execution.
+ */
+export interface ErrorStorage {
+  /** Store an error entry */
+  store(entry: ErrorEntry): Promise<void>;
+  /** Get all errors for a bead */
+  getByBead(beadId: string): Promise<ErrorEntry[]>;
+  /** Get unresolved errors for a bead */
+  getUnresolvedByBead(beadId: string): Promise<ErrorEntry[]>;
+  /** Mark an error as resolved */
+  markResolved(id: string): Promise<void>;
+  /** Get all errors */
+  getAll(): Promise<ErrorEntry[]>;
+}
+
+/**
+ * In-memory error storage
+ *
+ * Accumulates errors during subtask execution for feeding into retry prompts.
+ */
+export class InMemoryErrorStorage implements ErrorStorage {
+  private errors: ErrorEntry[] = [];
+
+  async store(entry: ErrorEntry): Promise<void> {
+    this.errors.push(entry);
+  }
+
+  async getByBead(beadId: string): Promise<ErrorEntry[]> {
+    return this.errors.filter((e) => e.bead_id === beadId);
+  }
+
+  async getUnresolvedByBead(beadId: string): Promise<ErrorEntry[]> {
+    return this.errors.filter((e) => e.bead_id === beadId && !e.resolved);
+  }
+
+  async markResolved(id: string): Promise<void> {
+    const error = this.errors.find((e) => e.id === id);
+    if (error) {
+      error.resolved = true;
+    }
+  }
+
+  async getAll(): Promise<ErrorEntry[]> {
+    return [...this.errors];
+  }
+}
+
+/**
+ * Error accumulator for tracking errors during subtask execution
+ *
+ * Implements patterns from "Patterns for Building AI Agents" p.40:
+ * - Examines and corrects errors when something goes wrong
+ * - Feeds error context into retry prompts
+ * - Tracks error patterns for learning
+ */
+export class ErrorAccumulator {
+  private storage: ErrorStorage;
+
+  constructor(storage?: ErrorStorage) {
+    this.storage = storage ?? new InMemoryErrorStorage();
+  }
+
+  /**
+   * Record an error during subtask execution
+   *
+   * @param beadId - Bead ID where error occurred
+   * @param errorType - Category of error
+   * @param message - Human-readable error message
+   * @param options - Additional context (stack trace, tool name, etc.)
+   * @returns The created error entry
+   */
+  async recordError(
+    beadId: string,
+    errorType: ErrorType,
+    message: string,
+    options?: {
+      stack_trace?: string;
+      tool_name?: string;
+      context?: string;
+    },
+  ): Promise<ErrorEntry> {
+    const entry: ErrorEntry = {
+      id: `${beadId}-${errorType}-${Date.now()}`,
+      bead_id: beadId,
+      error_type: errorType,
+      message,
+      stack_trace: options?.stack_trace,
+      tool_name: options?.tool_name,
+      timestamp: new Date().toISOString(),
+      resolved: false,
+      context: options?.context,
+    };
+
+    const validated = ErrorEntrySchema.parse(entry);
+    await this.storage.store(validated);
+
+    return validated;
+  }
+
+  /**
+   * Get all errors for a bead (resolved and unresolved)
+   */
+  async getErrors(beadId: string): Promise<ErrorEntry[]> {
+    return this.storage.getByBead(beadId);
+  }
+
+  /**
+   * Get only unresolved errors for a bead
+   */
+  async getUnresolvedErrors(beadId: string): Promise<ErrorEntry[]> {
+    return this.storage.getUnresolvedByBead(beadId);
+  }
+
+  /**
+   * Mark an error as resolved
+   */
+  async resolveError(errorId: string): Promise<void> {
+    await this.storage.markResolved(errorId);
+  }
+
+  /**
+   * Format errors as context for retry prompts
+   *
+   * Groups errors by type and provides structured feedback
+   * for the agent to learn from.
+   *
+   * @param beadId - Bead to get error context for
+   * @param includeResolved - Include resolved errors (default: false)
+   * @returns Formatted error context string
+   */
+  async getErrorContext(
+    beadId: string,
+    includeResolved = false,
+  ): Promise<string> {
+    const errors = includeResolved
+      ? await this.getErrors(beadId)
+      : await this.getUnresolvedErrors(beadId);
+
+    if (errors.length === 0) {
+      return "";
+    }
+
+    // Group errors by type
+    const byType = errors.reduce(
+      (acc, err) => {
+        const type = err.error_type;
+        if (!acc[type]) {
+          acc[type] = [];
+        }
+        acc[type].push(err);
+        return acc;
+      },
+      {} as Record<ErrorType, ErrorEntry[]>,
+    );
+
+    // Format as structured feedback
+    const lines = [
+      "## Previous Errors",
+      "",
+      "The following errors were encountered during execution:",
+      "",
+    ];
+
+    for (const [type, typeErrors] of Object.entries(byType)) {
+      lines.push(
+        `### ${type} (${typeErrors.length} error${typeErrors.length > 1 ? "s" : ""})`,
+      );
+      lines.push("");
+
+      for (const err of typeErrors) {
+        lines.push(`- **${err.message}**`);
+        if (err.context) {
+          lines.push(`  - Context: ${err.context}`);
+        }
+        if (err.tool_name) {
+          lines.push(`  - Tool: ${err.tool_name}`);
+        }
+        if (err.stack_trace) {
+          lines.push(`  - Stack: \`${err.stack_trace.slice(0, 100)}...\``);
+        }
+        lines.push(
+          `  - Time: ${new Date(err.timestamp).toLocaleString()}${err.resolved ? " (resolved)" : ""}`,
+        );
+        lines.push("");
+      }
+    }
+
+    lines.push(
+      "**Action Required**: Address these errors before proceeding. Consider:",
+    );
+    lines.push("- What caused each error?");
+    lines.push("- How can you prevent similar errors?");
+    lines.push("- Are there patterns across error types?");
+    lines.push("");
+
+    return lines.join("\n");
+  }
+
+  /**
+   * Get error statistics for outcome tracking
+   *
+   * @param beadId - Bead to get stats for
+   * @returns Error counts and patterns
+   */
+  async getErrorStats(beadId: string): Promise<{
+    total: number;
+    unresolved: number;
+    by_type: Record<ErrorType, number>;
+  }> {
+    const allErrors = await this.getErrors(beadId);
+    const unresolved = await this.getUnresolvedErrors(beadId);
+
+    const byType = allErrors.reduce(
+      (acc, err) => {
+        acc[err.error_type] = (acc[err.error_type] || 0) + 1;
+        return acc;
+      },
+      {} as Record<ErrorType, number>,
+    );
+
+    return {
+      total: allErrors.length,
+      unresolved: unresolved.length,
+      by_type: byType,
+    };
+  }
+}
+
+// ============================================================================
 // Exports
 // ============================================================================
 
@@ -448,4 +723,6 @@ export const learningSchemas = {
   OutcomeSignalsSchema,
   ScoredOutcomeSchema,
   DecompositionStrategySchema,
+  ErrorTypeSchema,
+  ErrorEntrySchema,
 };
