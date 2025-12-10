@@ -9,9 +9,89 @@
  * - Validate all output with Zod schemas
  * - Throw typed errors on failure
  * - Support atomic epic creation with rollback hints
+ *
+ * IMPORTANT: Call setBeadsWorkingDirectory() before using tools to ensure
+ * bd commands run in the correct project directory.
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
+
+// ============================================================================
+// Working Directory Configuration
+// ============================================================================
+
+/**
+ * Module-level working directory for bd commands.
+ * Set this via setBeadsWorkingDirectory() before using tools.
+ * If not set, commands run in process.cwd() which may be wrong for plugins.
+ */
+let beadsWorkingDirectory: string | null = null;
+
+/**
+ * Set the working directory for all beads commands.
+ * Call this from the plugin initialization with the project directory.
+ *
+ * @param directory - Absolute path to the project directory
+ */
+export function setBeadsWorkingDirectory(directory: string): void {
+  beadsWorkingDirectory = directory;
+}
+
+/**
+ * Get the current working directory for beads commands.
+ * Returns the configured directory or process.cwd() as fallback.
+ */
+export function getBeadsWorkingDirectory(): string {
+  return beadsWorkingDirectory || process.cwd();
+}
+
+/**
+ * Run a bd command in the correct working directory.
+ * Uses Bun.spawn with cwd option to ensure commands run in project directory.
+ */
+async function runBdCommand(
+  args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const cwd = getBeadsWorkingDirectory();
+  const proc = Bun.spawn(["bd", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  const exitCode = await proc.exited;
+
+  return { exitCode, stdout, stderr };
+}
+
+/**
+ * Run a git command in the correct working directory.
+ */
+async function runGitCommand(
+  args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const cwd = getBeadsWorkingDirectory();
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  const exitCode = await proc.exited;
+
+  return { exitCode, stdout, stderr };
+}
+
 import {
   BeadSchema,
   BeadCreateArgsSchema,
@@ -159,20 +239,20 @@ export const beads_create = tool({
     const validated = BeadCreateArgsSchema.parse(args);
     const cmdParts = buildCreateCommand(validated);
 
-    // Execute command
-    const result = await Bun.$`${cmdParts}`.quiet().nothrow();
+    // Execute command in the correct working directory
+    const result = await runBdCommand(cmdParts.slice(1)); // Remove 'bd' prefix
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to create bead: ${result.stderr.toString()}`,
+        `Failed to create bead: ${result.stderr}`,
         cmdParts.join(" "),
         result.exitCode,
-        result.stderr.toString(),
+        result.stderr,
       );
     }
 
     // Validate output before parsing
-    const stdout = result.stdout.toString().trim();
+    const stdout = result.stdout.trim();
     if (!stdout) {
       throw new BeadError(
         "bd create returned empty output",
@@ -231,17 +311,17 @@ export const beads_create_epic = tool({
         description: validated.epic_description,
       });
 
-      const epicResult = await Bun.$`${epicCmd}`.quiet().nothrow();
+      const epicResult = await runBdCommand(epicCmd.slice(1)); // Remove 'bd' prefix
 
       if (epicResult.exitCode !== 0) {
         throw new BeadError(
-          `Failed to create epic: ${epicResult.stderr.toString()}`,
+          `Failed to create epic: ${epicResult.stderr}`,
           epicCmd.join(" "),
           epicResult.exitCode,
         );
       }
 
-      const epic = parseBead(epicResult.stdout.toString());
+      const epic = parseBead(epicResult.stdout);
       created.push(epic);
 
       // 2. Create subtasks
@@ -253,17 +333,17 @@ export const beads_create_epic = tool({
           parent_id: epic.id,
         });
 
-        const subtaskResult = await Bun.$`${subtaskCmd}`.quiet().nothrow();
+        const subtaskResult = await runBdCommand(subtaskCmd.slice(1)); // Remove 'bd' prefix
 
         if (subtaskResult.exitCode !== 0) {
           throw new BeadError(
-            `Failed to create subtask: ${subtaskResult.stderr.toString()}`,
+            `Failed to create subtask: ${subtaskResult.stderr}`,
             subtaskCmd.join(" "),
             subtaskResult.exitCode,
           );
         }
 
-        const subtaskBead = parseBead(subtaskResult.stdout.toString());
+        const subtaskBead = parseBead(subtaskResult.stdout);
         created.push(subtaskBead);
       }
 
@@ -281,22 +361,21 @@ export const beads_create_epic = tool({
 
       for (const bead of created) {
         try {
-          const closeCmd = [
-            "bd",
+          const closeArgs = [
             "close",
             bead.id,
             "--reason",
             "Rollback partial epic",
             "--json",
           ];
-          const rollbackResult = await Bun.$`${closeCmd}`.quiet().nothrow();
+          const rollbackResult = await runBdCommand(closeArgs);
           if (rollbackResult.exitCode === 0) {
             rollbackCommands.push(
               `bd close ${bead.id} --reason "Rollback partial epic"`,
             );
           } else {
             rollbackErrors.push(
-              `${bead.id}: exit ${rollbackResult.exitCode} - ${rollbackResult.stderr.toString().trim()}`,
+              `${bead.id}: exit ${rollbackResult.exitCode} - ${rollbackResult.stderr.trim()}`,
             );
           }
         } catch (rollbackError) {
@@ -375,17 +454,17 @@ export const beads_query = tool({
       }
     }
 
-    const result = await Bun.$`${cmd}`.quiet().nothrow();
+    const result = await runBdCommand(cmd.slice(1)); // Remove 'bd' prefix
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to query beads: ${result.stderr.toString()}`,
+        `Failed to query beads: ${result.stderr}`,
         cmd.join(" "),
         result.exitCode,
       );
     }
 
-    const beads = parseBeads(result.stdout.toString());
+    const beads = parseBeads(result.stdout);
     const limited = beads.slice(0, validated.limit);
 
     return JSON.stringify(limited, null, 2);
@@ -427,17 +506,17 @@ export const beads_update = tool({
     }
     cmd.push("--json");
 
-    const result = await Bun.$`${cmd}`.quiet().nothrow();
+    const result = await runBdCommand(cmd.slice(1)); // Remove 'bd' prefix
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to update bead: ${result.stderr.toString()}`,
+        `Failed to update bead: ${result.stderr}`,
         cmd.join(" "),
         result.exitCode,
       );
     }
 
-    const bead = parseBead(result.stdout.toString());
+    const bead = parseBead(result.stdout);
     return JSON.stringify(bead, null, 2);
   },
 });
@@ -463,17 +542,17 @@ export const beads_close = tool({
       "--json",
     ];
 
-    const result = await Bun.$`${cmd}`.quiet().nothrow();
+    const result = await runBdCommand(cmd.slice(1)); // Remove 'bd' prefix
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to close bead: ${result.stderr.toString()}`,
+        `Failed to close bead: ${result.stderr}`,
         cmd.join(" "),
         result.exitCode,
       );
     }
 
-    const bead = parseBead(result.stdout.toString());
+    const bead = parseBead(result.stdout);
     return `Closed ${bead.id}: ${validated.reason}`;
   },
 });
@@ -488,19 +567,23 @@ export const beads_start = tool({
     id: tool.schema.string().describe("Bead ID"),
   },
   async execute(args, ctx) {
-    const cmd = ["bd", "update", args.id, "--status", "in_progress", "--json"];
-
-    const result = await Bun.$`${cmd}`.quiet().nothrow();
+    const result = await runBdCommand([
+      "update",
+      args.id,
+      "--status",
+      "in_progress",
+      "--json",
+    ]);
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to start bead: ${result.stderr.toString()}`,
-        cmd.join(" "),
+        `Failed to start bead: ${result.stderr}`,
+        `bd update ${args.id} --status in_progress --json`,
         result.exitCode,
       );
     }
 
-    const bead = parseBead(result.stdout.toString());
+    const bead = parseBead(result.stdout);
     return `Started: ${bead.id}`;
   },
 });
@@ -512,19 +595,17 @@ export const beads_ready = tool({
   description: "Get the next ready bead (unblocked, highest priority)",
   args: {},
   async execute(args, ctx) {
-    const cmd = ["bd", "ready", "--json"];
-
-    const result = await Bun.$`${cmd}`.quiet().nothrow();
+    const result = await runBdCommand(["ready", "--json"]);
 
     if (result.exitCode !== 0) {
       throw new BeadError(
-        `Failed to get ready beads: ${result.stderr.toString()}`,
-        cmd.join(" "),
+        `Failed to get ready beads: ${result.stderr}`,
+        "bd ready --json",
         result.exitCode,
       );
     }
 
-    const beads = parseBeads(result.stdout.toString());
+    const beads = parseBeads(result.stdout);
 
     if (beads.length === 0) {
       return "No ready beads";
@@ -586,13 +667,13 @@ export const beads_sync = tool({
     // 1. Pull if requested
     if (autoPull) {
       const pullResult = await withTimeout(
-        Bun.$`git pull --rebase`.quiet().nothrow(),
+        runGitCommand(["pull", "--rebase"]),
         TIMEOUT_MS,
         "git pull --rebase",
       );
       if (pullResult.exitCode !== 0) {
         throw new BeadError(
-          `Failed to pull: ${pullResult.stderr.toString()}`,
+          `Failed to pull: ${pullResult.stderr}`,
           "git pull --rebase",
           pullResult.exitCode,
         );
@@ -601,13 +682,13 @@ export const beads_sync = tool({
 
     // 2. Sync beads
     const syncResult = await withTimeout(
-      Bun.$`bd sync`.quiet().nothrow(),
+      runBdCommand(["sync"]),
       TIMEOUT_MS,
       "bd sync",
     );
     if (syncResult.exitCode !== 0) {
       throw new BeadError(
-        `Failed to sync beads: ${syncResult.stderr.toString()}`,
+        `Failed to sync beads: ${syncResult.stderr}`,
         "bd sync",
         syncResult.exitCode,
       );
@@ -615,21 +696,21 @@ export const beads_sync = tool({
 
     // 3. Push
     const pushResult = await withTimeout(
-      Bun.$`git push`.quiet().nothrow(),
+      runGitCommand(["push"]),
       TIMEOUT_MS,
       "git push",
     );
     if (pushResult.exitCode !== 0) {
       throw new BeadError(
-        `Failed to push: ${pushResult.stderr.toString()}`,
+        `Failed to push: ${pushResult.stderr}`,
         "git push",
         pushResult.exitCode,
       );
     }
 
     // 4. Verify clean state
-    const statusResult = await Bun.$`git status --porcelain`.quiet().nothrow();
-    const status = statusResult.stdout.toString().trim();
+    const statusResult = await runGitCommand(["status", "--porcelain"]);
+    const status = statusResult.stdout.trim();
 
     if (status !== "") {
       return `Beads synced and pushed, but working directory not clean:\n${status}`;
@@ -651,19 +732,17 @@ export const beads_link_thread = tool({
   async execute(args, ctx) {
     // Update bead description to include thread link
     // This is a workaround since bd doesn't have native metadata support
-    const queryResult = await Bun.$`bd show ${args.bead_id} --json`
-      .quiet()
-      .nothrow();
+    const queryResult = await runBdCommand(["show", args.bead_id, "--json"]);
 
     if (queryResult.exitCode !== 0) {
       throw new BeadError(
-        `Failed to get bead: ${queryResult.stderr.toString()}`,
+        `Failed to get bead: ${queryResult.stderr}`,
         `bd show ${args.bead_id} --json`,
         queryResult.exitCode,
       );
     }
 
-    const bead = parseBead(queryResult.stdout.toString());
+    const bead = parseBead(queryResult.stdout);
     const existingDesc = bead.description || "";
 
     // Add thread link if not already present
@@ -676,14 +755,17 @@ export const beads_link_thread = tool({
       ? `${existingDesc}\n\n${threadMarker}`
       : threadMarker;
 
-    const updateResult =
-      await Bun.$`bd update ${args.bead_id} -d ${newDesc} --json`
-        .quiet()
-        .nothrow();
+    const updateResult = await runBdCommand([
+      "update",
+      args.bead_id,
+      "-d",
+      newDesc,
+      "--json",
+    ]);
 
     if (updateResult.exitCode !== 0) {
       throw new BeadError(
-        `Failed to update bead: ${updateResult.stderr.toString()}`,
+        `Failed to update bead: ${updateResult.stderr}`,
         `bd update ${args.bead_id} -d ...`,
         updateResult.exitCode,
       );

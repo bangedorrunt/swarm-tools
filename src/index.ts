@@ -22,7 +22,7 @@
  */
 import type { Plugin, PluginInput, Hooks } from "@opencode-ai/plugin";
 
-import { beadsTools } from "./beads";
+import { beadsTools, setBeadsWorkingDirectory } from "./beads";
 import {
   agentMailTools,
   type AgentMailState,
@@ -48,7 +48,11 @@ import { repoCrawlTools } from "./repo-crawl";
 export const SwarmPlugin: Plugin = async (
   input: PluginInput,
 ): Promise<Hooks> => {
-  const { $ } = input;
+  const { $, directory } = input;
+
+  // Set the working directory for beads commands
+  // This ensures bd runs in the project directory, not ~/.config/opencode
+  setBeadsWorkingDirectory(directory);
 
   /** Track active sessions for cleanup */
   let activeAgentMailState: AgentMailState | null = null;
