@@ -664,7 +664,58 @@ export const beads_sync = tool({
       }
     };
 
-    // 1. Pull if requested
+    // 1. Flush beads to JSONL (doesn't use worktrees)
+    const flushResult = await withTimeout(
+      runBdCommand(["sync", "--flush-only"]),
+      TIMEOUT_MS,
+      "bd sync --flush-only",
+    );
+    if (flushResult.exitCode !== 0) {
+      throw new BeadError(
+        `Failed to flush beads: ${flushResult.stderr}`,
+        "bd sync --flush-only",
+        flushResult.exitCode,
+      );
+    }
+
+    // 2. Check if there are changes to commit
+    const beadsStatusResult = await runGitCommand([
+      "status",
+      "--porcelain",
+      ".beads/",
+    ]);
+    const hasChanges = beadsStatusResult.stdout.trim() !== "";
+
+    if (hasChanges) {
+      // 3. Stage .beads changes
+      const addResult = await runGitCommand(["add", ".beads/"]);
+      if (addResult.exitCode !== 0) {
+        throw new BeadError(
+          `Failed to stage beads: ${addResult.stderr}`,
+          "git add .beads/",
+          addResult.exitCode,
+        );
+      }
+
+      // 4. Commit
+      const commitResult = await withTimeout(
+        runGitCommand(["commit", "-m", "chore: sync beads"]),
+        TIMEOUT_MS,
+        "git commit",
+      );
+      if (
+        commitResult.exitCode !== 0 &&
+        !commitResult.stdout.includes("nothing to commit")
+      ) {
+        throw new BeadError(
+          `Failed to commit beads: ${commitResult.stderr}`,
+          "git commit",
+          commitResult.exitCode,
+        );
+      }
+    }
+
+    // 5. Pull if requested (with rebase to avoid merge commits)
     if (autoPull) {
       const pullResult = await withTimeout(
         runGitCommand(["pull", "--rebase"]),
@@ -678,23 +729,20 @@ export const beads_sync = tool({
           pullResult.exitCode,
         );
       }
-    }
 
-    // 2. Sync beads
-    const syncResult = await withTimeout(
-      runBdCommand(["sync"]),
-      TIMEOUT_MS,
-      "bd sync",
-    );
-    if (syncResult.exitCode !== 0) {
-      throw new BeadError(
-        `Failed to sync beads: ${syncResult.stderr}`,
-        "bd sync",
-        syncResult.exitCode,
+      // 6. Import any changes from remote
+      const importResult = await withTimeout(
+        runBdCommand(["sync", "--import-only"]),
+        TIMEOUT_MS,
+        "bd sync --import-only",
       );
+      if (importResult.exitCode !== 0) {
+        // Non-fatal - just log warning
+        console.warn(`[beads] Import warning: ${importResult.stderr}`);
+      }
     }
 
-    // 3. Push
+    // 7. Push
     const pushResult = await withTimeout(
       runGitCommand(["push"]),
       TIMEOUT_MS,
