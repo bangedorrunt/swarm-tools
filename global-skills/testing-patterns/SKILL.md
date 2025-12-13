@@ -311,9 +311,120 @@ Need to add tests to code?
       └─ Draw Effect Sketches
 ```
 
+## Kent Beck's 4 Rules of Simple Design
+
+From Beck (codified by Corey Haines) - in priority order:
+
+1. **Tests Pass** - Code must work. Without this, nothing else matters.
+2. **Reveals Intention** - Code should express what it does clearly.
+3. **No Duplication** - DRY, but specifically _duplication of knowledge_, not just structure.
+4. **Fewest Elements** - Remove anything that doesn't serve the above three.
+
+### Test Names Should Influence API
+
+Test names reveal design problems:
+
+```typescript
+// Bad: test name doesn't match code
+test("a]live cell with 2 neighbors stays alive", () => {
+  const cell = new Cell(true);
+  cell.setNeighborCount(2);
+  expect(cell.aliveInNextGeneration()).toBe(true);
+});
+
+// Better: API matches the language of the test
+test("alive cell with 2 neighbors stays alive", () => {
+  const cell = Cell.alive();
+  expect(cell.aliveInNextGeneration({ neighbors: 2 })).toBe(true);
+});
+```
+
+### Test Behavior, Not State
+
+```typescript
+// Testing state (fragile)
+test("sets alive to false", () => {
+  const cell = new Cell();
+  cell.die();
+  expect(cell.alive).toBe(false);
+});
+
+// Testing behavior (robust)
+test("dead cell stays dead with no neighbors", () => {
+  const cell = Cell.dead();
+  expect(cell.aliveInNextGeneration({ neighbors: 0 })).toBe(false);
+});
+```
+
+### Duplication of Knowledge vs Structure
+
+Not all duplication is bad. Two pieces of code that look the same but represent different concepts should NOT be merged:
+
+```typescript
+// These look similar but represent different domain concepts
+const MINIMUM_NEIGHBORS_TO_SURVIVE = 2;
+const MINIMUM_NEIGHBORS_TO_REPRODUCE = 3;
+
+// DON'T merge just because the numbers are close
+// They change for different reasons
+```
+
+## Self-Testing Code (Fowler)
+
+> "Self-testing code not only enables refactoring—it also makes it much safer to add new features."
+
+**The key insight**: When a test fails, you know exactly what broke because you just changed it. Tests are a "powerful bug detector that decapitates the time it takes to find bugs."
+
+### Test Isolation
+
+- Each test should be independent
+- Don't have tests depend on previous tests
+- Tests should be able to run in any order
+
+### Breaking Abstraction Level
+
+Tests become fragile when they test at the wrong level:
+
+```typescript
+// Fragile: tests implementation details
+test("stores user in database", () => {
+  createUser({ name: "Joel" });
+  expect(db.query("SELECT * FROM users")).toContain({ name: "Joel" });
+});
+
+// Robust: tests behavior through public API
+test("created user can be retrieved", () => {
+  const id = createUser({ name: "Joel" });
+  expect(getUser(id).name).toBe("Joel");
+});
+```
+
+## Test Doubles
+
+**Fake**: Working implementation with shortcuts (in-memory DB)
+**Stub**: Returns canned answers to calls
+**Mock**: Verifies interactions happened
+**Spy**: Records calls for later verification
+
+**Prefer fakes over mocks** - they're more realistic and less brittle.
+
+```typescript
+// Fake - actually works, just simpler
+class FakeEmailService implements EmailService {
+  sent: Email[] = [];
+  send(email: Email) {
+    this.sent.push(email);
+  }
+}
+
+// Mock - verifies interaction
+const mockEmail = mock<EmailService>();
+// ... code runs ...
+expect(mockEmail.send).toHaveBeenCalledWith(expectedEmail);
+```
+
 ## References
 
 For detailed patterns and examples:
 
 - `references/dependency-breaking-catalog.md` - All 25 techniques with examples
-- `references/monster-methods.md` - Strategies for huge untested methods
