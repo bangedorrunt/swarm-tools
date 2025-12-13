@@ -135,7 +135,6 @@ export const SwarmPlugin: Plugin = async (
      */
     tool: {
       ...beadsTools,
-      ...agentMailTools,
       ...swarmMailTools,
       ...structuredTools,
       ...swarmTools,
@@ -357,7 +356,6 @@ export {
  */
 export const allTools = {
   ...beadsTools,
-  ...agentMailTools,
   ...swarmMailTools,
   ...structuredTools,
   ...swarmTools,
