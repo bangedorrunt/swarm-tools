@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
+    "@electric-sql/pglite": "0.3.14",
     "@opencode-ai/plugin": "^1.0.134",
     "gray-matter": "^4.0.3",
     "ioredis": "^5.4.1",
