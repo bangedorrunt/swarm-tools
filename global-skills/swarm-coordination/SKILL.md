@@ -6,161 +6,284 @@ tags:
   - multi-agent
   - coordination
 tools:
+  - swarm_plan_prompt
   - swarm_decompose
-  - swarm_complete
+  - swarm_validate_decomposition
   - swarm_spawn_subtask
+  - swarm_complete
+  - swarm_status
+  - swarm_progress
+  - beads_create_epic
+  - beads_query
   - agentmail_init
   - agentmail_send
   - agentmail_inbox
   - agentmail_reserve
+  - agentmail_release
+  - semantic-memory_find
+  - cass_search
+  - pdf-brain_search
+  - skills_list
+references:
+  - references/strategies.md
+  - references/coordinator-patterns.md
 ---
 
-# Swarm Coordination Skill
+# Swarm Coordination
 
-This skill provides guidance for effective multi-agent coordination in OpenCode swarm workflows.
+Multi-agent orchestration for parallel task execution. The coordinator breaks work into subtasks, spawns worker agents, monitors progress, and aggregates results.
 
-## When to Use Swarm Coordination
+## When to Swarm
 
-Use swarm coordination when:
+**DO swarm when:**
 
-- A task has multiple independent subtasks that can run in parallel
-- The task requires different specializations (e.g., frontend + backend + tests)
-- Work can be divided by file/module boundaries
-- Time-to-completion matters and parallelization helps
+- Task touches 3+ files
+- Natural parallel boundaries exist (frontend/backend/tests)
+- Different specializations needed
+- Time-to-completion matters
 
-Do NOT use swarm coordination when:
+**DON'T swarm when:**
 
-- The task is simple and can be done by one agent
-- Subtasks have heavy dependencies on each other
-- The overhead of coordination exceeds the benefit
+- Task is 1-2 files
+- Heavy sequential dependencies
+- Coordination overhead > benefit
+- Tight feedback loop needed
 
-## Task Decomposition Strategy
+**Heuristic:** If you can describe the task in one sentence without "and", don't swarm.
 
-### 1. Analyze the Task
+## Coordinator Workflow
 
-Before decomposing, understand:
+### Phase 1: Knowledge Gathering (MANDATORY)
 
-- What are the distinct units of work?
-- Which parts can run in parallel vs sequentially?
-- What are the file/module boundaries?
-- Are there shared resources that need coordination?
+Before decomposing, query ALL knowledge sources:
 
-### 2. Choose a Decomposition Strategy
+```typescript
+// 1. Past learnings from this project
+semantic - memory_find({ query: "<task keywords>", limit: 5 });
 
-**Parallel Strategy** - For independent subtasks:
+// 2. How similar tasks were solved before
+cass_search({ query: "<task description>", limit: 5 });
 
-```
-Parent Task: "Add user authentication"
-├── Subtask 1: "Create auth API endpoints" (backend)
-├── Subtask 2: "Build login/signup forms" (frontend)
-├── Subtask 3: "Write auth integration tests" (testing)
-└── Subtask 4: "Add auth documentation" (docs)
-```
+// 3. Design patterns and prior art
+pdf - brain_search({ query: "<domain concepts>", limit: 5 });
 
-**Sequential Strategy** - When order matters:
-
-```
-Parent Task: "Migrate database schema"
-├── Step 1: "Create migration files"
-├── Step 2: "Update model definitions"
-├── Step 3: "Run migrations"
-└── Step 4: "Verify data integrity"
+// 4. Available skills to inject into workers
+skills_list();
 ```
 
-**Hybrid Strategy** - Mixed dependencies:
+Synthesize findings into `shared_context` for workers.
 
+### Phase 2: Decomposition
+
+```typescript
+// Auto-select strategy and generate decomposition prompt
+const plan = await swarm_plan_prompt({
+  task: "Add user authentication with OAuth",
+  max_subtasks: 5,
+  query_cass: true, // searches history
+  include_skills: true, // lists relevant skills
+});
+
+// Agent responds with BeadTree JSON, then validate
+const validation = await swarm_validate_decomposition({
+  response: agentResponse,
+});
+
+// Create epic + subtasks atomically
+await beads_create_epic({
+  epic_title: "Add OAuth Authentication",
+  epic_description: "...",
+  subtasks: validation.subtasks,
+});
 ```
-Parent Task: "Add feature X"
-├── Phase 1 (parallel):
-│   ├── Subtask A: "Design API"
-│   └── Subtask B: "Design UI mockups"
-├── Phase 2 (sequential, after Phase 1):
-│   └── Subtask C: "Implement based on designs"
-└── Phase 3 (parallel):
-    ├── Subtask D: "Write tests"
-    └── Subtask E: "Update docs"
+
+### Phase 3: Spawn Workers
+
+```typescript
+for (const subtask of subtasks) {
+  const prompt = await swarm_spawn_subtask({
+    bead_id: subtask.id,
+    epic_id: epic.id,
+    subtask_title: subtask.title,
+    subtask_description: subtask.description,
+    files: subtask.files,
+    shared_context: synthesizedContext,
+  });
+
+  // Spawn via Task tool
+  Task({
+    subagent_type: "swarm/worker",
+    prompt: prompt.worker_prompt,
+  });
+}
 ```
+
+### Phase 4: Monitor & Intervene
+
+```typescript
+// Check progress
+const status = await swarm_status({ epic_id, project_key });
+
+// Check for messages
+const inbox = await agentmail_inbox({ limit: 5 });
+
+// Intervene if needed (see Intervention Patterns)
+```
+
+### Phase 5: Aggregate & Complete
+
+- Verify all subtasks completed
+- Run final verification (typecheck, tests)
+- Close epic with summary
+- Record outcomes for learning
+
+## Decomposition Strategies
+
+Four strategies, auto-selected by task keywords:
+
+| Strategy           | Best For                      | Keywords                              |
+| ------------------ | ----------------------------- | ------------------------------------- |
+| **file-based**     | Refactoring, migrations       | refactor, migrate, rename, update all |
+| **feature-based**  | New features, vertical slices | add, implement, build, create         |
+| **risk-based**     | Bug fixes, security           | fix, bug, security, critical          |
+| **research-based** | Investigation, discovery      | research, investigate, explore        |
+
+See `references/strategies.md` for full details.
 
 ## File Reservation Protocol
 
-When multiple agents work on the same codebase:
+Workers MUST reserve files before editing:
 
-1. **Reserve files before editing** - Use `agentmail_reserve` to claim files
-2. **Respect reservations** - Don't edit files reserved by other agents
-3. **Release when done** - Files auto-release on task completion
-4. **Coordinate on shared files** - If you must edit a reserved file, send a message to the owning agent
+```typescript
+// Reserve (exclusive by default)
+await agentmail_reserve({
+  paths: ["src/auth/**"],
+  reason: "bd-123: Auth service implementation",
+  ttl_seconds: 3600,
+});
 
-## Communication Patterns
+// Work...
 
-### Broadcasting Updates
-
-```
-agentmail_send(to: ["all"], subject: "API Complete", body: "Completed API endpoints, ready for frontend integration")
-```
-
-### Direct Coordination
-
-```
-agentmail_send(to: ["frontend-agent"], subject: "Auth API Ready", body: "Auth API is at /api/auth/*, here's the spec...")
+// Release (or let swarm_complete handle it)
+await agentmail_release({ paths: ["src/auth/**"] });
 ```
 
-### Checking for Messages
+**Rules:**
 
-```
-# Check inbox for updates (context-safe: max 5, no bodies)
-agentmail_inbox()
+- No file overlap between subtasks
+- Coordinator mediates conflicts
+- `swarm_complete` auto-releases
 
-# Read specific message when needed
-agentmail_read_message(message_id: 123)
-```
+## Communication Protocol
 
-## Best Practices
+Workers communicate via Agent Mail with epic ID as thread:
 
-1. **Small, focused subtasks** - Each subtask should be completable in one agent session
-2. **Clear boundaries** - Define exactly what files/modules each subtask touches
-3. **Explicit handoffs** - When one task enables another, communicate clearly
-4. **Graceful failures** - If a subtask fails, don't block the whole swarm
-5. **Progress updates** - Use beads to track subtask status
+```typescript
+// Progress update
+agentmail_send({
+  to: ["coordinator"],
+  subject: "Auth API complete",
+  body: "Endpoints ready at /api/auth/*",
+  thread_id: epic_id,
+});
 
-## Common Patterns
-
-### Feature Development
-
-```yaml
-decomposition:
-  strategy: hybrid
-  phases:
-    - name: design
-      parallel: true
-      subtasks: [api-design, ui-design]
-    - name: implement
-      parallel: true
-      subtasks: [backend, frontend]
-    - name: validate
-      parallel: true
-      subtasks: [tests, docs, review]
+// Blocker
+agentmail_send({
+  to: ["coordinator"],
+  subject: "BLOCKED: Need DB schema",
+  body: "Can't proceed without users table",
+  thread_id: epic_id,
+  importance: "urgent",
+});
 ```
 
-### Bug Fix Swarm
+**Coordinator checks inbox regularly** - don't let workers spin.
 
-```yaml
-decomposition:
-  strategy: sequential
-  subtasks:
-    - reproduce-bug
-    - identify-root-cause
-    - implement-fix
-    - add-regression-test
+## Intervention Patterns
+
+| Signal                  | Action                               |
+| ----------------------- | ------------------------------------ |
+| Worker blocked >5 min   | Check inbox, offer guidance          |
+| File conflict           | Mediate, reassign files              |
+| Worker asking questions | Answer directly                      |
+| Scope creep             | Redirect, create new bead for extras |
+| Repeated failures       | Take over or reassign                |
+
+## Failure Recovery
+
+### Incompatible Outputs
+
+Two workers produce conflicting results.
+
+**Fix:** Pick one approach, re-run other with constraint.
+
+### Worker Drift
+
+Worker implements something different than asked.
+
+**Fix:** Revert, re-run with explicit instructions.
+
+### Cascade Failure
+
+One blocker affects multiple subtasks.
+
+**Fix:** Unblock manually, reassign dependent work, accept partial completion.
+
+## Anti-Patterns
+
+| Anti-Pattern         | Symptom                          | Fix                           |
+| -------------------- | -------------------------------- | ----------------------------- |
+| **Mega-Coordinator** | Coordinator editing files        | Coordinator only orchestrates |
+| **Silent Swarm**     | No communication, late conflicts | Require updates, check inbox  |
+| **Over-Decomposed**  | 10 subtasks for 20 lines         | 2-5 subtasks max              |
+| **Under-Specified**  | "Implement backend"              | Clear goal, files, criteria   |
+
+## Shared Context Template
+
+```markdown
+## Project Context
+
+- Repository: {repo}
+- Stack: {tech stack}
+- Patterns: {from pdf-brain}
+
+## Task Context
+
+- Epic: {title}
+- Goal: {success criteria}
+- Constraints: {scope, time}
+
+## Prior Art
+
+- Similar tasks: {from CASS}
+- Learnings: {from semantic-memory}
+
+## Coordination
+
+- Active subtasks: {list}
+- Reserved files: {list}
+- Thread: {epic_id}
 ```
 
-### Refactoring
+## Quick Reference
 
-```yaml
-decomposition:
-  strategy: parallel
-  subtasks:
-    - refactor-module-a
-    - refactor-module-b
-    - update-imports
-    - run-full-test-suite
+```typescript
+// Full swarm flow
+semantic - memory_find({ query }); // 1. Check learnings
+cass_search({ query }); // 2. Check history
+pdf - brain_search({ query }); // 3. Check patterns
+skills_list(); // 4. Check skills
+
+swarm_plan_prompt({ task }); // 5. Generate decomposition
+swarm_validate_decomposition(); // 6. Validate
+beads_create_epic(); // 7. Create beads
+
+swarm_spawn_subtask(); // 8. Spawn workers (loop)
+swarm_status(); // 9. Monitor
+agentmail_inbox(); // 10. Check messages
+
+// Workers complete with:
+swarm_complete(); // Auto: close bead, release files, notify
 ```
+
+See `references/coordinator-patterns.md` for detailed patterns.

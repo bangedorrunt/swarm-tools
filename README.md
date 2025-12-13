@@ -203,7 +203,7 @@ skills_use(name="swarm-coordination")   # Load swarm workflow
 | `learning-systems`   | learning, feedback   | Implicit feedback scoring, confidence decay, anti-pattern detection                  |
 | `mcp-tool-authoring` | mcp, tools           | Building MCP tools - schema definition, context passing, error handling              |
 | `skill-creator`      | meta, skills         | Guide for creating effective skills                                                  |
-| `swarm-coordination` | swarm, multi-agent   | Multi-agent coordination patterns for swarm workflows                                |
+| `swarm-coordination` | swarm, multi-agent   | Complete swarm playbook - strategies, coordinator patterns, failure recovery         |
 | `system-design`      | design, architecture | Building reusable systems - deep modules, complexity management, design red flags    |
 
 ### Skill Locations
