@@ -1084,17 +1084,17 @@ async function setup() {
       const s = p.spinner();
       s.start("Updating AGENTS.md...");
 
-      const agentsPrompt = `You are updating the user's AGENTS.md file to add skill awareness.
+      const agentsPrompt = `You are updating the user's AGENTS.md file to add swarm plugin awareness.
 
 ## Task
-Read ${agentsPath} and add a Skills section if one doesn't exist. If a skills section exists, update it.
+Read ${agentsPath} and add sections for Skills, CASS, and Semantic Memory if they don't exist. Update existing sections if present.
 
 ## What to Add
 
-1. **Tool Preferences** - If there's a tool_preferences or similar section, add skills tools:
-   - skills_list - discover available skills
-   - skills_use - load skill for context injection  
-   - skills_read - read full skill content
+1. **Tool Preferences** - If there's a tool_preferences section, add these tools:
+   - skills_list, skills_use, skills_read - knowledge injection
+   - cass_search, cass_view, cass_expand - search past agent sessions
+   - semantic-memory_find, semantic-memory_store - persistent learning
 
 2. **Skills Section** - Add this (adapt style to match the file):
 
@@ -1110,17 +1110,65 @@ Skills are reusable knowledge packages. Load them on-demand for specialized task
 **Usage:**
 \`\`\`
 skills_list()                              # See available skills
-skills_use(name="debugging")               # Load a skill
-skills_use(name="code-review", context="reviewing auth") # With context
+skills_use(name="swarm-coordination")      # Load a skill
+skills_use(name="cli-builder", context="building a new CLI") # With context
 \`\`\`
 
-**Bundled Skills:** agent-patterns, cli-builder, code-review, debugging, learning-systems, mcp-tool-authoring, resilience-patterns, skill-creator, swarm-coordination, tacit-knowledge-extraction, testing-strategies, zod-validation
+**Bundled Skills:** cli-builder, learning-systems, mcp-tool-authoring, skill-creator, swarm-coordination
+
+3. **CASS Section** - Add this:
+
+### CASS (Cross-Agent Session Search)
+
+Search across ALL your AI coding agent histories before solving problems from scratch.
+
+**When to Use:**
+- BEFORE implementing anything - check if any agent solved it before
+- When debugging - "what did I try last time this error happened?"
+- When learning patterns - "how did Cursor handle this API?"
+
+**Usage:**
+\`\`\`
+cass_search(query="authentication token refresh", limit=5)  # Search all agents
+cass_search(query="useEffect cleanup", agent="claude", days=7)  # Filter by agent/time
+cass_view(path="/path/from/search", line=42)  # View specific result
+cass_expand(path="/path", line=42, context=10)  # Expand context around match
+\`\`\`
+
+**Pro tip:** Query CASS at the START of complex tasks. Past solutions save time.
+
+4. **Semantic Memory Section** - Add this:
+
+### Semantic Memory (Persistent Learning)
+
+Store and retrieve learnings across sessions. Memories persist and are searchable.
+
+**When to Use:**
+- After solving a tricky problem - store the solution
+- After making architectural decisions - store the reasoning
+- Before starting work - search for relevant past learnings
+- When you discover project-specific patterns
+
+**Usage:**
+\`\`\`
+# Store a learning
+semantic-memory_store(information="OAuth refresh tokens need 5min buffer before expiry", metadata="auth, tokens")
+
+# Search for relevant memories
+semantic-memory_find(query="token refresh", limit=5)
+
+# Validate a memory is still accurate (resets decay timer)
+semantic-memory_validate(id="mem_123")
+\`\`\`
+
+**Pro tip:** Store the WHY, not just the WHAT. Future you needs context.
 
 ## Rules
 - Preserve existing content and style
-- Don't duplicate - update if skills section exists
-- Keep tone consistent
-- Place near tool preferences or as logical new section
+- Don't duplicate - update existing sections if present
+- Keep tone consistent with the rest of the file
+- Place sections in logical order (Skills, CASS, Semantic Memory)
+- If there's a tool_preferences section, add the tools there too
 
 Edit the file now.`;
 
@@ -1641,61 +1689,63 @@ async function agents() {
   const s = p.spinner();
   s.start("Updating AGENTS.md with skill awareness...");
 
-  const prompt = `You are updating the user's AGENTS.md file to add skill awareness.
+  const prompt = `You are updating the user's AGENTS.md file to add swarm plugin awareness.
 
 ## Task
-Read ~/.config/opencode/AGENTS.md and add a Skills section if one doesn't exist.
+Read ~/.config/opencode/AGENTS.md and add sections for Skills, CASS, and Semantic Memory if they don't exist.
 
 ## What to Add
-Add a section about using skills. Include:
 
-1. **Tool Preferences Update** - Add skills_* tools to the tool priority list:
-   - skills_list - discover available skills
-   - skills_use - load skill for context injection
-   - skills_read - read full skill content
+1. **Tool Preferences** - Add these tools to any tool_preferences section:
+   - skills_list, skills_use, skills_read - knowledge injection
+   - cass_search, cass_view, cass_expand - search past agent sessions
+   - semantic-memory_find, semantic-memory_store - persistent learning
 
-2. **Skills Section** - Add this section (adapt to match the file's style):
+2. **Skills Section**:
 
 ### Skills (Knowledge Injection)
 
-Skills are reusable knowledge packages. Load them on-demand for specialized tasks.
+Skills are reusable knowledge packages. Load on-demand for specialized tasks.
 
-**When to Use Skills:**
-- Before starting unfamiliar work - check if a skill exists
-- When you need domain-specific patterns
-- For complex workflows that benefit from guidance
+**When to Use:** Before unfamiliar work, when you need domain patterns, for complex workflows.
 
-**Available Skills** (run \`skills_list()\` to see current list):
-- agent-patterns: AI agent design patterns
-- cli-builder: TypeScript CLI patterns
-- code-review: Review checklists
-- debugging: Root cause analysis
-- learning-systems: Feedback scoring, pattern maturity
-- mcp-tool-authoring: Building MCP tools
-- resilience-patterns: Error recovery, retries
-- skill-creator: Creating new skills
-- swarm-coordination: Multi-agent workflows
-- tacit-knowledge-extraction: Pattern mining
-- testing-strategies: Vitest patterns
-- zod-validation: Schema validation
-
-**Usage Pattern:**
 \`\`\`
-# Check what's available
-skills_list()
+skills_list()                              # See available skills
+skills_use(name="swarm-coordination")      # Load a skill
+\`\`\`
 
-# Load a skill before starting work
-skills_use(name="debugging")
+**Bundled:** cli-builder, learning-systems, mcp-tool-authoring, skill-creator, swarm-coordination
 
-# Load with context
-skills_use(name="code-review", context="reviewing auth changes")
+3. **CASS Section**:
+
+### CASS (Cross-Agent Session Search)
+
+Search ALL your AI coding agent histories before solving from scratch.
+
+**When to Use:** BEFORE implementing - check if solved before. When debugging - what worked last time?
+
+\`\`\`
+cass_search(query="auth token refresh", limit=5)  # Search all agents
+cass_view(path="/path/from/search", line=42)      # View result
+\`\`\`
+
+4. **Semantic Memory Section**:
+
+### Semantic Memory (Persistent Learning)
+
+Store and retrieve learnings across sessions.
+
+**When to Use:** After solving tricky problems, after architectural decisions, before starting work.
+
+\`\`\`
+semantic-memory_store(information="OAuth needs 5min buffer", metadata="auth")
+semantic-memory_find(query="token refresh", limit=5)
 \`\`\`
 
 ## Rules
-- Preserve the existing content and style
-- Add the skills section in a logical place (near tool preferences or as a new section)
-- Don't duplicate if a skills section already exists - update it instead
-- Keep the tone consistent with the rest of the file
+- Preserve existing content and style
+- Don't duplicate - update if sections exist
+- Keep tone consistent
 
 Edit the file now.`;
 

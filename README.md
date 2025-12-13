@@ -197,20 +197,13 @@ skills_use(name="swarm-coordination")   # Load swarm workflow
 
 ### Bundled Skills
 
-| Skill                        | Tags                 | Description                                                                          |
-| ---------------------------- | -------------------- | ------------------------------------------------------------------------------------ |
-| `agent-patterns`             | ai, agents, patterns | AI agent design patterns - capability whiteboards, architecture evolution, evals     |
-| `cli-builder`                | cli, typescript, bun | Building TypeScript CLIs with Bun - argument parsing, subcommands, output formatting |
-| `code-review`                | review, quality      | Code review patterns - systematic checklists, feedback patterns                      |
-| `debugging`                  | debugging, errors    | Systematic debugging - root cause analysis, error resolution                         |
-| `learning-systems`           | learning, feedback   | Implicit feedback scoring, confidence decay, anti-pattern detection                  |
-| `mcp-tool-authoring`         | mcp, tools           | Building MCP tools - schema definition, context passing, error handling              |
-| `resilience-patterns`        | errors, recovery     | Error recovery, retry strategies, graceful degradation                               |
-| `skill-creator`              | meta, skills         | Guide for creating effective skills                                                  |
-| `swarm-coordination`         | swarm, multi-agent   | Multi-agent coordination patterns for swarm workflows                                |
-| `tacit-knowledge-extraction` | knowledge, patterns  | Extracting tacit knowledge into pattern languages                                    |
-| `testing-strategies`         | testing, vitest      | Testing async/swarm operations, mocking patterns                                     |
-| `zod-validation`             | zod, typescript      | Schema validation patterns with Zod                                                  |
+| Skill                | Tags                 | Description                                                                          |
+| -------------------- | -------------------- | ------------------------------------------------------------------------------------ |
+| `cli-builder`        | cli, typescript, bun | Building TypeScript CLIs with Bun - argument parsing, subcommands, output formatting |
+| `learning-systems`   | learning, feedback   | Implicit feedback scoring, confidence decay, anti-pattern detection                  |
+| `mcp-tool-authoring` | mcp, tools           | Building MCP tools - schema definition, context passing, error handling              |
+| `skill-creator`      | meta, skills         | Guide for creating effective skills                                                  |
+| `swarm-coordination` | swarm, multi-agent   | Multi-agent coordination patterns for swarm workflows                                |
 
 ### Skill Locations
 
