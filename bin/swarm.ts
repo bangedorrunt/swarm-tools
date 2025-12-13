@@ -1106,6 +1106,7 @@ function config() {
   const commandPath = join(configDir, "command", "swarm.md");
   const plannerAgentPath = join(configDir, "agent", "swarm-planner.md");
   const workerAgentPath = join(configDir, "agent", "swarm-worker.md");
+  const globalSkillsPath = join(configDir, "skills");
 
   console.log(yellow(BANNER));
   console.log(dim("  " + TAGLINE + " v" + VERSION));
@@ -1127,6 +1128,60 @@ function config() {
     console.log(`  ${emoji} ${desc}`);
     console.log(`     ${color}${status}\x1b[0m ${dim(path)}`);
     console.log();
+  }
+
+  // Skills section
+  console.log(cyan("Skills:"));
+  console.log();
+
+  // Global skills directory
+  const globalSkillsExists = existsSync(globalSkillsPath);
+  const globalStatus = globalSkillsExists ? "✓" : "✗";
+  const globalColor = globalSkillsExists ? "\x1b[32m" : "\x1b[31m";
+  console.log(`  📚 Global skills directory`);
+  console.log(
+    `     ${globalColor}${globalStatus}\x1b[0m ${dim(globalSkillsPath)}`,
+  );
+
+  // Count skills if directory exists
+  if (globalSkillsExists) {
+    try {
+      const { readdirSync } = require("fs");
+      const skills = readdirSync(globalSkillsPath, { withFileTypes: true })
+        .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+        .map((d: { name: string }) => d.name);
+      if (skills.length > 0) {
+        console.log(
+          `     ${dim(`Found ${skills.length} skill(s): ${skills.join(", ")}`)}`,
+        );
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+  console.log();
+
+  // Project skills locations
+  console.log(`  📁 Project skills locations ${dim("(checked in order)")}`);
+  console.log(`     ${dim(".opencode/skills/")}`);
+  console.log(`     ${dim(".claude/skills/")}`);
+  console.log(`     ${dim("skills/")}`);
+  console.log();
+
+  // Bundled skills info
+  const bundledSkillsPath = join(__dirname, "..", "global-skills");
+  if (existsSync(bundledSkillsPath)) {
+    try {
+      const { readdirSync } = require("fs");
+      const bundled = readdirSync(bundledSkillsPath, { withFileTypes: true })
+        .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+        .map((d: { name: string }) => d.name);
+      console.log(`  🎁 Bundled skills ${dim("(always available)")}`);
+      console.log(`     ${dim(bundled.join(", "))}`);
+      console.log();
+    } catch {
+      // Ignore errors
+    }
   }
 
   console.log(dim("Edit these files to customize swarm behavior."));
