@@ -48,6 +48,11 @@ import {
   formatToolAvailability,
   type ToolName,
 } from "./tool-availability";
+import {
+  getSkillsContextForSwarm,
+  findRelevantSkills,
+  listSkills,
+} from "./skills";
 
 // ============================================================================
 // Conflict Detection
@@ -708,8 +713,19 @@ Only modify these files. Need others? Message the coordinator.
 ### Agent Mail
 - agentmail_send (thread_id: {epic_id})
 
+### Skills (if available)
+- skills_list (discover available skills)
+- skills_use (activate a skill for specialized guidance)
+
 ### Completion
 - swarm_complete (REQUIRED when done)
+
+## [LEARNING]
+As you work, note reusable patterns, best practices, or domain insights:
+- If you discover something that would help future agents, consider creating a skill
+- Use skills_create to codify patterns for the project
+- Good skills have clear "when to use" descriptions with actionable instructions
+- Skills make swarms smarter over time
 
 ## [OUTPUT]
 1. Read files first
@@ -717,7 +733,7 @@ Only modify these files. Need others? Message the coordinator.
 3. Verify (typecheck)
 4. Complete with swarm_complete
 
-Return: Summary of changes made
+Return: Summary of changes made. Note any patterns worth preserving as skills.
 
 **Never work silently.** Communicate progress and blockers immediately.
 
@@ -1157,6 +1173,8 @@ const STRATEGY_DECOMPOSITION_PROMPT = `You are decomposing a task into paralleli
 
 {cass_history}
 
+{skills_context}
+
 ## MANDATORY: Beads Issue Tracking
 
 **Every subtask MUST become a bead.** This is non-negotiable.
@@ -1240,6 +1258,10 @@ export const swarm_plan_prompt = tool({
 
       .optional()
       .describe("Max CASS results to include (default: 3)"),
+    include_skills: tool.schema
+      .boolean()
+      .optional()
+      .describe("Include available skills in context (default: true)"),
   },
   async execute(args) {
     // Select strategy
@@ -1288,6 +1310,30 @@ export const swarm_plan_prompt = tool({
       cassResultInfo = { queried: false, reason: "disabled" };
     }
 
+    // Fetch skills context
+    let skillsContext = "";
+    let skillsInfo: { included: boolean; count?: number; relevant?: string[] } = {
+      included: false,
+    };
+
+    if (args.include_skills !== false) {
+      const allSkills = await listSkills();
+      if (allSkills.length > 0) {
+        skillsContext = await getSkillsContextForSwarm();
+        const relevantSkills = await findRelevantSkills(args.task);
+        skillsInfo = {
+          included: true,
+          count: allSkills.length,
+          relevant: relevantSkills,
+        };
+
+        // Add suggestion for relevant skills
+        if (relevantSkills.length > 0) {
+          skillsContext += `\n\n**Suggested skills for this task**: ${relevantSkills.join(", ")}`;
+        }
+      }
+    }
+
     // Format strategy guidelines
     const strategyGuidelines = formatStrategyGuidelines(selectedStrategy);
 
@@ -1301,6 +1347,7 @@ export const swarm_plan_prompt = tool({
       .replace("{strategy_guidelines}", strategyGuidelines)
       .replace("{context_section}", contextSection)
       .replace("{cass_history}", cassContext || "")
+      .replace("{skills_context}", skillsContext || "")
       .replace("{max_subtasks}", (args.max_subtasks ?? 5).toString());
 
     return JSON.stringify(
@@ -1328,6 +1375,7 @@ export const swarm_plan_prompt = tool({
         validation_note:
           "Parse agent response as JSON and validate with swarm_validate_decomposition",
         cass_history: cassResultInfo,
+        skills: skillsInfo,
       },
       null,
       2,
@@ -2091,6 +2139,18 @@ export const swarm_complete = tool({
                 ? "skipped"
                 : "no files or ubs unavailable",
             },
+        learning_prompt: `## Reflection
+
+Did you learn anything reusable during this subtask? Consider:
+
+1. **Patterns**: Any code patterns or approaches that worked well?
+2. **Gotchas**: Edge cases or pitfalls to warn future agents about?
+3. **Best Practices**: Domain-specific guidelines worth documenting?
+4. **Tool Usage**: Effective ways to use tools for this type of task?
+
+If you discovered something valuable, use \`swarm_learn\` or \`skills_create\` to preserve it as a skill for future swarms.
+
+Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
       },
       null,
       2,
@@ -2563,6 +2623,196 @@ export const swarm_evaluation_prompt = tool({
 });
 
 // ============================================================================
+// Swarm Learning
+// ============================================================================
+
+/**
+ * Learn from completed work and optionally create a skill
+ *
+ * This tool helps agents reflect on patterns, best practices, or domain
+ * knowledge discovered during task execution and codify them into reusable
+ * skills for future swarms.
+ *
+ * Implements the "learning swarm" pattern where swarms get smarter over time.
+ */
+export const swarm_learn = tool({
+  description: `Analyze completed work and optionally create a skill from learned patterns.
+
+Use after completing a subtask when you've discovered:
+- Reusable code patterns or approaches
+- Domain-specific best practices
+- Gotchas or edge cases to warn about
+- Effective tool usage patterns
+
+This tool helps you formalize learnings into a skill that future agents can discover and use.`,
+  args: {
+    summary: tool.schema
+      .string()
+      .describe("Brief summary of what was learned (1-2 sentences)"),
+    pattern_type: tool.schema
+      .enum(["code-pattern", "best-practice", "gotcha", "tool-usage", "domain-knowledge", "workflow"])
+      .describe("Category of the learning"),
+    details: tool.schema
+      .string()
+      .describe("Detailed explanation of the pattern or practice"),
+    example: tool.schema
+      .string()
+      .optional()
+      .describe("Code example or concrete illustration"),
+    when_to_use: tool.schema
+      .string()
+      .describe("When should an agent apply this knowledge?"),
+    files_context: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Files that exemplify this pattern"),
+    create_skill: tool.schema
+      .boolean()
+      .optional()
+      .describe("Create a skill from this learning (default: false, just document)"),
+    skill_name: tool.schema
+      .string()
+      .regex(/^[a-z0-9-]+$/)
+      .max(64)
+      .optional()
+      .describe("Skill name if creating (required if create_skill=true)"),
+    skill_tags: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Tags for the skill if creating"),
+  },
+  async execute(args) {
+    // Format the learning as structured documentation
+    const learning = {
+      summary: args.summary,
+      type: args.pattern_type,
+      details: args.details,
+      example: args.example,
+      when_to_use: args.when_to_use,
+      files_context: args.files_context,
+      recorded_at: new Date().toISOString(),
+    };
+
+    // If creating a skill, generate and create it
+    if (args.create_skill) {
+      if (!args.skill_name) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: "skill_name is required when create_skill=true",
+            learning: learning,
+          },
+          null,
+          2,
+        );
+      }
+
+      // Build skill body from learning
+      const skillBody = `# ${args.summary}
+
+## When to Use
+${args.when_to_use}
+
+## ${args.pattern_type.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+
+${args.details}
+
+${args.example ? `## Example\n\n\`\`\`\n${args.example}\n\`\`\`\n` : ""}
+${args.files_context && args.files_context.length > 0 ? `## Reference Files\n\n${args.files_context.map((f) => `- \`${f}\``).join("\n")}\n` : ""}
+
+---
+*Learned from swarm execution on ${new Date().toISOString().split("T")[0]}*`;
+
+      // Import skills_create functionality
+      const { getSkill, invalidateSkillsCache } = await import("./skills");
+      const { mkdir, writeFile } = await import("fs/promises");
+      const { join } = await import("path");
+
+      // Check if skill exists
+      const existing = await getSkill(args.skill_name);
+      if (existing) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: `Skill '${args.skill_name}' already exists`,
+            existing_path: existing.path,
+            learning: learning,
+            suggestion: "Use skills_update to add to existing skill, or choose a different name",
+          },
+          null,
+          2,
+        );
+      }
+
+      // Create skill directory and file
+      const skillDir = join(process.cwd(), ".opencode", "skills", args.skill_name);
+      const skillPath = join(skillDir, "SKILL.md");
+
+      const frontmatter = [
+        "---",
+        `name: ${args.skill_name}`,
+        `description: ${args.when_to_use.slice(0, 200)}${args.when_to_use.length > 200 ? "..." : ""}`,
+        "tags:",
+        `  - ${args.pattern_type}`,
+        `  - learned`,
+        ...(args.skill_tags || []).map((t) => `  - ${t}`),
+        "---",
+      ].join("\n");
+
+      try {
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(skillPath, `${frontmatter}\n\n${skillBody}`, "utf-8");
+        invalidateSkillsCache();
+
+        return JSON.stringify(
+          {
+            success: true,
+            skill_created: true,
+            skill: {
+              name: args.skill_name,
+              path: skillPath,
+              type: args.pattern_type,
+            },
+            learning: learning,
+            message: `Created skill '${args.skill_name}' from learned pattern. Future agents can discover it with skills_list.`,
+          },
+          null,
+          2,
+        );
+      } catch (error) {
+        return JSON.stringify(
+          {
+            success: false,
+            error: `Failed to create skill: ${error instanceof Error ? error.message : String(error)}`,
+            learning: learning,
+          },
+          null,
+          2,
+        );
+      }
+    }
+
+    // Just document the learning without creating a skill
+    return JSON.stringify(
+      {
+        success: true,
+        skill_created: false,
+        learning: learning,
+        message: "Learning documented. Use create_skill=true to persist as a skill for future agents.",
+        suggested_skill_name: args.skill_name ||
+          args.summary
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, "")
+            .replace(/\s+/g, "-")
+            .slice(0, 64),
+      },
+      null,
+      2,
+    );
+  },
+});
+
+// ============================================================================
 // Error Accumulator
 // ============================================================================
 
@@ -2703,12 +2953,17 @@ export const swarm_resolve_error = tool({
 /**
  * Initialize swarm and check tool availability
  *
- * Call this at the start of a swarm session to see what tools are available
- * and what features will be degraded.
+ * Call this at the start of a swarm session to see what tools are available,
+ * what skills exist in the project, and what features will be degraded.
+ *
+ * Skills are automatically discovered from:
+ * - .opencode/skills/
+ * - .claude/skills/
+ * - skills/
  */
 export const swarm_init = tool({
   description:
-    "Initialize swarm session and check tool availability. Call at swarm start to see what features are available.",
+    "Initialize swarm session: discovers available skills, checks tool availability. ALWAYS call at swarm start.",
   args: {
     project_path: tool.schema
       .string()
@@ -2757,6 +3012,26 @@ export const swarm_init = tool({
       degradedFeatures.push("persistent learning (using in-memory fallback)");
     }
 
+    // Discover available skills
+    const availableSkills = await listSkills();
+    const skillsInfo = {
+      count: availableSkills.length,
+      available: availableSkills.length > 0,
+      skills: availableSkills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        hasScripts: s.hasScripts,
+      })),
+    };
+
+    // Add skills guidance if available
+    let skillsGuidance: string | undefined;
+    if (availableSkills.length > 0) {
+      skillsGuidance = `Found ${availableSkills.length} skill(s). Use skills_list to see details, skills_use to activate.`;
+    } else {
+      skillsGuidance = "No skills found. Add skills to .opencode/skills/ or .claude/skills/ for specialized guidance.";
+    }
+
     return JSON.stringify(
       {
         ready: true,
@@ -2769,10 +3044,12 @@ export const swarm_init = tool({
             },
           ]),
         ),
+        skills: skillsInfo,
         warnings: warnings.length > 0 ? warnings : undefined,
         degraded_features:
           degradedFeatures.length > 0 ? degradedFeatures : undefined,
         recommendations: {
+          skills: skillsGuidance,
           beads: beadsAvailable
             ? "✓ Use beads for all task tracking"
             : "Install beads: npm i -g @joelhooks/beads",
@@ -2802,6 +3079,7 @@ export const swarmTools = {
   swarm_progress: swarm_progress,
   swarm_broadcast: swarm_broadcast,
   swarm_complete: swarm_complete,
+  swarm_learn: swarm_learn,
   swarm_record_outcome: swarm_record_outcome,
   swarm_subtask_prompt: swarm_subtask_prompt,
   swarm_spawn_subtask: swarm_spawn_subtask,
