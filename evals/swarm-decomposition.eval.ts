@@ -2,13 +2,17 @@
  * Swarm Decomposition Quality Eval
  *
  * Tests the quality of task decomposition for swarm coordination.
- * Uses custom scorers to evaluate:
+ * Uses real LLM calls via AI SDK + Vercel AI Gateway.
+ *
+ * Scorers evaluate:
  * - Subtask independence (no file conflicts)
  * - Complexity balance (even distribution)
  * - Coverage completeness (all required files)
  * - Instruction clarity (actionable descriptions)
  *
  * Run with: pnpm evalite evals/swarm-decomposition.eval.ts
+ *
+ * Requires: ANTHROPIC_API_KEY environment variable
  */
 import { evalite } from "evalite";
 import {
@@ -17,81 +21,31 @@ import {
   coverageCompleteness,
   instructionClarity,
 } from "./scorers/index.js";
+import { decompositionCases } from "./fixtures/decomposition-cases.js";
 import {
-  decompositionCases,
-  type DecompositionTestCase,
-} from "./fixtures/decomposition-cases.js";
-
-/**
- * Mock decomposition function for testing
- *
- * In real usage, this would call the actual swarm_plan_prompt
- * and have an LLM generate the decomposition.
- *
- * For eval purposes, we use deterministic mock responses
- * to test the scorers themselves.
- */
-function mockDecompose(input: DecompositionTestCase["input"]): string {
-  // Generate a mock BeadTree based on the task
-  const taskLower = input.task.toLowerCase();
-
-  // Determine subtask count based on task complexity keywords
-  let subtaskCount = 3;
-  if (taskLower.includes("large") || taskLower.includes("legacy")) {
-    subtaskCount = 5;
-  } else if (taskLower.includes("fix") || taskLower.includes("bug")) {
-    subtaskCount = 2;
-  } else if (taskLower.includes("dashboard") || taskLower.includes("admin")) {
-    subtaskCount = 4;
-  }
-
-  // Generate mock subtasks
-  const subtasks: Array<{
-    title: string;
-    description: string;
-    files: string[];
-    dependencies: number[];
-    estimated_complexity: number;
-  }> = [];
-  for (let i = 0; i < subtaskCount; i++) {
-    subtasks.push({
-      title: `Subtask ${i + 1}: ${input.task.split(" ").slice(0, 3).join(" ")}`,
-      description: `Implement part ${i + 1} of the ${input.task}. This involves setting up the necessary infrastructure and writing the core logic.`,
-      files: [`src/feature-${i + 1}/index.ts`, `src/feature-${i + 1}/types.ts`],
-      dependencies: i > 0 ? [i - 1] : [],
-      estimated_complexity: Math.floor(Math.random() * 3) + 2, // 2-4
-    });
-  }
-
-  const beadTree = {
-    epic: {
-      title: input.task,
-      description: input.context || `Implementation of: ${input.task}`,
-    },
-    subtasks,
-  };
-
-  return JSON.stringify(beadTree, null, 2);
-}
+  generateDecomposition,
+  formatDecompositionPrompt,
+  extractJson,
+} from "./lib/llm.js";
 
 /**
  * Swarm Decomposition Quality Eval
  *
- * Tests decomposition quality across multiple dimensions.
+ * Tests decomposition quality with real LLM calls.
  */
 evalite("Swarm Decomposition Quality", {
-  // Test data from fixtures - return pre-computed outputs for scorer testing
+  // Test data from fixtures
   data: async () =>
     decompositionCases.map((testCase) => ({
       input: testCase.input,
       expected: testCase.expected,
-      // Pre-compute output for scorer testing
-      output: mockDecompose(testCase.input),
     })),
 
-  // Task: passthrough since we pre-computed outputs
+  // Task: generate real decomposition via Claude
   task: async (input) => {
-    return mockDecompose(input);
+    const prompt = formatDecompositionPrompt(input.task, input.context);
+    const response = await generateDecomposition(prompt);
+    return extractJson(response);
   },
 
   // Scorers evaluate decomposition quality
@@ -104,24 +58,26 @@ evalite("Swarm Decomposition Quality", {
 });
 
 /**
- * Edge Case Eval: Empty and Minimal Tasks
+ * Edge Case Eval: Minimal and Complex Tasks
  *
  * Tests handling of edge cases in decomposition.
  */
 evalite("Decomposition Edge Cases", {
   data: async () => [
     {
-      input: { task: "Fix typo in README" },
-      expected: { minSubtasks: 1, maxSubtasks: 1 },
+      input: { task: "Fix typo in README.md" },
+      expected: { minSubtasks: 1, maxSubtasks: 2 },
     },
     {
-      input: { task: "Refactor entire codebase to use new framework" },
-      expected: { minSubtasks: 5, maxSubtasks: 10 },
+      input: { task: "Refactor entire codebase from JavaScript to TypeScript" },
+      expected: { minSubtasks: 4, maxSubtasks: 8 },
     },
   ],
 
   task: async (input) => {
-    return mockDecompose(input);
+    const prompt = formatDecompositionPrompt(input.task, undefined, 8);
+    const response = await generateDecomposition(prompt);
+    return extractJson(response);
   },
 
   scorers: [subtaskIndependence, coverageCompleteness],
