@@ -37,6 +37,9 @@ import {
   releaseSwarmFiles,
   sendSwarmMessage,
 } from "./streams/swarm-mail";
+import { getAgent } from "./streams/projections";
+import { createEvent } from "./streams/events";
+import { appendEvent } from "./streams/store";
 import {
   addStrike,
   clearStrikes,
@@ -966,8 +969,64 @@ export const swarm_complete = tool({
       .describe(
         "Skip ALL verification (UBS, typecheck, tests). Use sparingly! (default: false)",
       ),
+    planned_files: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Files that were originally planned to be modified"),
+    start_time: tool.schema
+      .number()
+      .optional()
+      .describe("Task start timestamp (Unix ms) for duration calculation"),
+    error_count: tool.schema
+      .number()
+      .optional()
+      .describe("Number of errors encountered during task"),
+    retry_count: tool.schema
+      .number()
+      .optional()
+      .describe("Number of retry attempts during task"),
   },
   async execute(args) {
+    // Verify agent is registered in swarm-mail
+    // This catches agents who skipped swarmmail_init
+    const projectKey = args.project_key.replace(/\//g, "-").replace(/\\/g, "-");
+    let agentRegistered = false;
+    let registrationWarning = "";
+
+    try {
+      const agent = await getAgent(
+        projectKey,
+        args.agent_name,
+        args.project_key,
+      );
+      agentRegistered = agent !== null;
+
+      if (!agentRegistered) {
+        registrationWarning = `⚠️  WARNING: Agent '${args.agent_name}' was NOT registered in swarm-mail for project '${projectKey}'.
+
+This usually means you skipped the MANDATORY swarmmail_init step.
+
+**Impact:**
+- Your work was not tracked in the coordination system
+- File reservations may not have been managed
+- Other agents couldn't coordinate with you
+- Learning/eval data may be incomplete
+
+**Next time:** Run swarmmail_init(project_path="${args.project_key}", task_description="<task>") FIRST, before any other work.
+
+Continuing with completion, but this should be fixed for future subtasks.`;
+
+        console.warn(`[swarm_complete] ${registrationWarning}`);
+      }
+    } catch (error) {
+      // Non-fatal - agent might be using legacy workflow
+      console.warn(
+        `[swarm_complete] Could not verify agent registration:`,
+        error,
+      );
+      registrationWarning = `ℹ️  Could not verify swarm-mail registration (database may not be available). Consider running swarmmail_init next time.`;
+    }
+
     // Run Verification Gate unless explicitly skipped
     let verificationResult: VerificationGateResult | null = null;
 
@@ -1086,6 +1145,34 @@ export const swarm_complete = tool({
       );
     }
 
+    // Emit SubtaskOutcomeEvent for learning system
+    try {
+      const epicId = args.bead_id.includes(".")
+        ? args.bead_id.split(".")[0]
+        : args.bead_id;
+
+      const durationMs = args.start_time ? Date.now() - args.start_time : 0;
+
+      const event = createEvent("subtask_outcome", {
+        project_key: args.project_key,
+        epic_id: epicId,
+        bead_id: args.bead_id,
+        planned_files: args.planned_files || [],
+        actual_files: args.files_touched || [],
+        duration_ms: durationMs,
+        error_count: args.error_count || 0,
+        retry_count: args.retry_count || 0,
+        success: true,
+      });
+      await appendEvent(event, args.project_key);
+    } catch (error) {
+      // Non-fatal - log and continue
+      console.warn(
+        "[swarm_complete] Failed to emit SubtaskOutcomeEvent:",
+        error,
+      );
+    }
+
     // Release file reservations for this agent using embedded swarm-mail
     try {
       await releaseSwarmFiles({
@@ -1140,6 +1227,10 @@ export const swarm_complete = tool({
       closed: true,
       reservations_released: true,
       message_sent: true,
+      agent_registration: {
+        verified: agentRegistered,
+        warning: registrationWarning || undefined,
+      },
       verification_gate: verificationResult
         ? {
             passed: true,

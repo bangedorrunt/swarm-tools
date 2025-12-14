@@ -142,6 +142,46 @@ export const TaskBlockedEventSchema = BaseEventSchema.extend({
 });
 
 // ============================================================================
+// Eval Capture Events (for learning system)
+// ============================================================================
+
+export const DecompositionGeneratedEventSchema = BaseEventSchema.extend({
+  type: z.literal("decomposition_generated"),
+  epic_id: z.string(),
+  task: z.string(),
+  context: z.string().optional(),
+  strategy: z.enum(["file-based", "feature-based", "risk-based"]),
+  epic_title: z.string(),
+  subtasks: z.array(
+    z.object({
+      title: z.string(),
+      files: z.array(z.string()),
+      priority: z.number().min(0).max(3).optional(),
+    }),
+  ),
+});
+
+export const SubtaskOutcomeEventSchema = BaseEventSchema.extend({
+  type: z.literal("subtask_outcome"),
+  epic_id: z.string(),
+  bead_id: z.string(),
+  planned_files: z.array(z.string()),
+  actual_files: z.array(z.string()),
+  duration_ms: z.number().min(0),
+  error_count: z.number().min(0).default(0),
+  retry_count: z.number().min(0).default(0),
+  success: z.boolean(),
+});
+
+export const HumanFeedbackEventSchema = BaseEventSchema.extend({
+  type: z.literal("human_feedback"),
+  epic_id: z.string(),
+  accepted: z.boolean(),
+  modified: z.boolean().default(false),
+  notes: z.string().optional(),
+});
+
+// ============================================================================
 // Union Type
 // ============================================================================
 
@@ -157,6 +197,9 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   TaskProgressEventSchema,
   TaskCompletedEventSchema,
   TaskBlockedEventSchema,
+  DecompositionGeneratedEventSchema,
+  SubtaskOutcomeEventSchema,
+  HumanFeedbackEventSchema,
 ]);
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
@@ -173,6 +216,11 @@ export type TaskStartedEvent = z.infer<typeof TaskStartedEventSchema>;
 export type TaskProgressEvent = z.infer<typeof TaskProgressEventSchema>;
 export type TaskCompletedEvent = z.infer<typeof TaskCompletedEventSchema>;
 export type TaskBlockedEvent = z.infer<typeof TaskBlockedEventSchema>;
+export type DecompositionGeneratedEvent = z.infer<
+  typeof DecompositionGeneratedEventSchema
+>;
+export type SubtaskOutcomeEvent = z.infer<typeof SubtaskOutcomeEventSchema>;
+export type HumanFeedbackEvent = z.infer<typeof HumanFeedbackEventSchema>;
 
 // ============================================================================
 // Session State Types

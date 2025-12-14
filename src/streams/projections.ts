@@ -315,3 +315,190 @@ function pathMatches(path: string, pattern: string): boolean {
   // Glob match using minimatch
   return minimatch(path, pattern);
 }
+
+// ============================================================================
+// Eval Records Projections
+// ============================================================================
+
+export interface EvalRecord {
+  id: string;
+  project_key: string;
+  task: string;
+  context: string | null;
+  strategy: string;
+  epic_title: string;
+  subtasks: Array<{
+    title: string;
+    files: string[];
+    priority?: number;
+  }>;
+  outcomes?: Array<{
+    bead_id: string;
+    planned_files: string[];
+    actual_files: string[];
+    duration_ms: number;
+    error_count: number;
+    retry_count: number;
+    success: boolean;
+  }>;
+  overall_success: boolean | null;
+  total_duration_ms: number | null;
+  total_errors: number | null;
+  human_accepted: boolean | null;
+  human_modified: boolean | null;
+  human_notes: string | null;
+  file_overlap_count: number | null;
+  scope_accuracy: number | null;
+  time_balance_ratio: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EvalStats {
+  totalRecords: number;
+  successRate: number;
+  avgDurationMs: number;
+  byStrategy: Record<string, number>;
+}
+
+/**
+ * Get eval records with optional filters
+ */
+export async function getEvalRecords(
+  projectKey: string,
+  options?: { limit?: number; strategy?: string },
+  projectPath?: string,
+): Promise<EvalRecord[]> {
+  const db = await getDatabase(projectPath);
+
+  const conditions = ["project_key = $1"];
+  const params: (string | number)[] = [projectKey];
+  let paramIndex = 2;
+
+  if (options?.strategy) {
+    conditions.push(`strategy = $${paramIndex++}`);
+    params.push(options.strategy);
+  }
+
+  const whereClause = conditions.join(" AND ");
+  let query = `
+    SELECT id, project_key, task, context, strategy, epic_title, subtasks,
+           outcomes, overall_success, total_duration_ms, total_errors,
+           human_accepted, human_modified, human_notes,
+           file_overlap_count, scope_accuracy, time_balance_ratio,
+           created_at, updated_at
+    FROM eval_records
+    WHERE ${whereClause}
+    ORDER BY created_at DESC
+  `;
+
+  if (options?.limit) {
+    query += ` LIMIT $${paramIndex}`;
+    params.push(options.limit);
+  }
+
+  const result = await db.query<{
+    id: string;
+    project_key: string;
+    task: string;
+    context: string | null;
+    strategy: string;
+    epic_title: string;
+    subtasks: string;
+    outcomes: string | null;
+    overall_success: boolean | null;
+    total_duration_ms: number | null;
+    total_errors: number | null;
+    human_accepted: boolean | null;
+    human_modified: boolean | null;
+    human_notes: string | null;
+    file_overlap_count: number | null;
+    scope_accuracy: number | null;
+    time_balance_ratio: number | null;
+    created_at: string;
+    updated_at: string;
+  }>(query, params);
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    project_key: row.project_key,
+    task: row.task,
+    context: row.context,
+    strategy: row.strategy,
+    epic_title: row.epic_title,
+    // PGlite returns JSONB columns as already-parsed objects
+    subtasks:
+      typeof row.subtasks === "string"
+        ? JSON.parse(row.subtasks)
+        : row.subtasks,
+    outcomes: row.outcomes
+      ? typeof row.outcomes === "string"
+        ? JSON.parse(row.outcomes)
+        : row.outcomes
+      : undefined,
+    overall_success: row.overall_success,
+    total_duration_ms: row.total_duration_ms,
+    total_errors: row.total_errors,
+    human_accepted: row.human_accepted,
+    human_modified: row.human_modified,
+    human_notes: row.human_notes,
+    file_overlap_count: row.file_overlap_count,
+    scope_accuracy: row.scope_accuracy,
+    time_balance_ratio: row.time_balance_ratio,
+    created_at: parseInt(row.created_at as string),
+    updated_at: parseInt(row.updated_at as string),
+  }));
+}
+
+/**
+ * Get eval statistics for a project
+ */
+export async function getEvalStats(
+  projectKey: string,
+  projectPath?: string,
+): Promise<EvalStats> {
+  const db = await getDatabase(projectPath);
+
+  // Get overall stats
+  const overallResult = await db.query<{
+    total_records: string;
+    success_count: string;
+    avg_duration: string;
+  }>(
+    `SELECT 
+      COUNT(*) as total_records,
+      COUNT(*) FILTER (WHERE overall_success = true) as success_count,
+      AVG(total_duration_ms) as avg_duration
+    FROM eval_records
+    WHERE project_key = $1`,
+    [projectKey],
+  );
+
+  const totalRecords = parseInt(overallResult.rows[0]?.total_records || "0");
+  const successCount = parseInt(overallResult.rows[0]?.success_count || "0");
+  const avgDurationMs = parseFloat(overallResult.rows[0]?.avg_duration || "0");
+
+  // Get by-strategy breakdown
+  const strategyResult = await db.query<{
+    strategy: string;
+    count: string;
+  }>(
+    `SELECT strategy, COUNT(*) as count
+    FROM eval_records
+    WHERE project_key = $1
+    GROUP BY strategy`,
+    [projectKey],
+  );
+
+  const byStrategy: Record<string, number> = {};
+  for (const row of strategyResult.rows) {
+    byStrategy[row.strategy] = parseInt(row.count);
+  }
+
+  return {
+    totalRecords,
+    successRate: totalRecords > 0 ? successCount / totalRecords : 0,
+    avgDurationMs,
+    byStrategy,
+  };
+}

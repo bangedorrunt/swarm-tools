@@ -273,19 +273,28 @@ Only modify these files. Need others? Message the coordinator.
 
 {error_context}
 
-## [MANDATORY: SWARM MAIL]
+## [MANDATORY: SWARM MAIL INITIALIZATION]
 
-**YOU MUST USE SWARM MAIL FOR ALL COORDINATION.** This is non-negotiable.
+**CRITICAL: YOU MUST INITIALIZE SWARM MAIL BEFORE DOING ANY WORK.**
 
-### Initialize FIRST (before any work)
+This is your FIRST step - before reading files, before planning, before ANY other action.
+
+### Step 1: Initialize (REQUIRED - DO THIS FIRST)
 \`\`\`
-swarmmail_init(project_path="$PWD", task_description="{subtask_title}")
+swarmmail_init(project_path="{project_path}", task_description="{bead_id}: {subtask_title}")
 \`\`\`
 
-### Reserve Files (if not already reserved by coordinator)
-\`\`\`
-swarmmail_reserve(paths=[...files...], reason="{bead_id}: {subtask_title}")
-\`\`\`
+**This registers you with the coordination system and enables:**
+- File reservation tracking
+- Inter-agent communication
+- Progress monitoring
+- Conflict detection
+
+**If you skip this step, your work will not be tracked and swarm_complete will fail.**
+
+## [SWARM MAIL USAGE]
+
+After initialization, use Swarm Mail for coordination:
 
 ### Check Inbox Regularly
 \`\`\`
@@ -340,14 +349,17 @@ As you work, note reusable patterns, best practices, or domain insights:
 - Skills make swarms smarter over time
 
 ## [WORKFLOW]
-1. **swarmmail_init** - Initialize session FIRST
+1. **swarmmail_init** - Initialize session (MANDATORY FIRST STEP)
 2. Read assigned files
 3. Implement changes
 4. **swarmmail_send** - Report progress to coordinator
 5. Verify (typecheck)
 6. **swarm_complete** - Mark done, release reservations
 
-**CRITICAL: Never work silently. Send progress updates via swarmmail_send every significant milestone.**
+**CRITICAL REQUIREMENTS:**
+- Step 1 (swarmmail_init) is NON-NEGOTIABLE - do it before anything else
+- Never work silently - send progress updates via swarmmail_send every significant milestone
+- If you complete without initializing, swarm_complete will detect this and warn/fail
 
 Begin now.`;
 
@@ -409,6 +421,7 @@ export function formatSubtaskPromptV2(params: {
   shared_context?: string;
   compressed_context?: string;
   error_context?: string;
+  project_path?: string;
 }): string {
   const fileList =
     params.files.length > 0
@@ -423,6 +436,7 @@ export function formatSubtaskPromptV2(params: {
 
   return SUBTASK_PROMPT_V2.replace(/{bead_id}/g, params.bead_id)
     .replace(/{epic_id}/g, params.epic_id)
+    .replace(/{project_path}/g, params.project_path || "$PWD")
     .replace("{subtask_title}", params.subtask_title)
     .replace(
       "{subtask_description}",
@@ -497,6 +511,10 @@ export const swarm_subtask_prompt = tool({
       .string()
       .optional()
       .describe("Context shared across all agents"),
+    project_path: tool.schema
+      .string()
+      .optional()
+      .describe("Absolute project path for swarmmail_init"),
   },
   async execute(args) {
     const prompt = formatSubtaskPrompt({
@@ -521,7 +539,7 @@ export const swarm_subtask_prompt = tool({
  */
 export const swarm_spawn_subtask = tool({
   description:
-    "Prepare a subtask for spawning. Returns prompt with Agent Mail/beads instructions.",
+    "Prepare a subtask for spawning. Returns prompt with Agent Mail/beads instructions. IMPORTANT: Pass project_path for swarmmail_init.",
   args: {
     bead_id: tool.schema.string().describe("Subtask bead ID"),
     epic_id: tool.schema.string().describe("Parent epic bead ID"),
@@ -537,6 +555,12 @@ export const swarm_spawn_subtask = tool({
       .string()
       .optional()
       .describe("Context shared across all agents"),
+    project_path: tool.schema
+      .string()
+      .optional()
+      .describe(
+        "Absolute project path for swarmmail_init (REQUIRED for tracking)",
+      ),
   },
   async execute(args) {
     const prompt = formatSubtaskPromptV2({
@@ -546,6 +570,7 @@ export const swarm_spawn_subtask = tool({
       subtask_description: args.subtask_description || "",
       files: args.files,
       shared_context: args.shared_context,
+      project_path: args.project_path,
     });
 
     return JSON.stringify(
@@ -554,6 +579,7 @@ export const swarm_spawn_subtask = tool({
         bead_id: args.bead_id,
         epic_id: args.epic_id,
         files: args.files,
+        project_path: args.project_path,
       },
       null,
       2,

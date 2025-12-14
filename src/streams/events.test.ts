@@ -21,6 +21,9 @@ import {
   TaskProgressEventSchema,
   TaskCompletedEventSchema,
   TaskBlockedEventSchema,
+  DecompositionGeneratedEventSchema,
+  SubtaskOutcomeEventSchema,
+  HumanFeedbackEventSchema,
   createEvent,
   isEventType,
   type AgentEvent,
@@ -358,6 +361,299 @@ describe("TaskBlockedEventSchema", () => {
       reason: "Waiting for API credentials",
     };
     expect(() => TaskBlockedEventSchema.parse(event)).not.toThrow();
+  });
+});
+
+describe("DecompositionGeneratedEventSchema", () => {
+  it("validates a complete decomposition_generated event", () => {
+    const event = {
+      type: "decomposition_generated",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      task: "Add user authentication",
+      context: "OAuth integration for GitHub",
+      strategy: "feature-based",
+      epic_title: "User Authentication",
+      subtasks: [
+        {
+          title: "Create OAuth flow",
+          files: ["src/auth/oauth.ts"],
+          priority: 2,
+        },
+        { title: "Add login UI", files: ["src/ui/login.tsx"], priority: 1 },
+      ],
+    };
+    expect(() => DecompositionGeneratedEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("validates without optional context", () => {
+    const event = {
+      type: "decomposition_generated",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      task: "Add user authentication",
+      strategy: "file-based",
+      epic_title: "User Authentication",
+      subtasks: [{ title: "Create OAuth flow", files: ["src/auth/oauth.ts"] }],
+    };
+    expect(() => DecompositionGeneratedEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("validates strategy enum values", () => {
+    const validStrategies = ["file-based", "feature-based", "risk-based"];
+    for (const strategy of validStrategies) {
+      const event = {
+        type: "decomposition_generated",
+        project_key: "/test/project",
+        timestamp: Date.now(),
+        epic_id: "bd-123",
+        task: "Test task",
+        strategy,
+        epic_title: "Test",
+        subtasks: [{ title: "Subtask", files: ["test.ts"] }],
+      };
+      expect(() =>
+        DecompositionGeneratedEventSchema.parse(event),
+      ).not.toThrow();
+    }
+  });
+
+  it("rejects invalid strategy value", () => {
+    const event = {
+      type: "decomposition_generated",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      task: "Test task",
+      strategy: "invalid-strategy",
+      epic_title: "Test",
+      subtasks: [{ title: "Subtask", files: ["test.ts"] }],
+    };
+    expect(() => DecompositionGeneratedEventSchema.parse(event)).toThrow();
+  });
+
+  it("validates subtask priority bounds", () => {
+    const baseEvent = {
+      type: "decomposition_generated",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      task: "Test",
+      strategy: "file-based",
+      epic_title: "Test",
+    };
+
+    // Valid: 0
+    expect(() =>
+      DecompositionGeneratedEventSchema.parse({
+        ...baseEvent,
+        subtasks: [{ title: "Test", files: ["test.ts"], priority: 0 }],
+      }),
+    ).not.toThrow();
+
+    // Valid: 3
+    expect(() =>
+      DecompositionGeneratedEventSchema.parse({
+        ...baseEvent,
+        subtasks: [{ title: "Test", files: ["test.ts"], priority: 3 }],
+      }),
+    ).not.toThrow();
+
+    // Invalid: -1
+    expect(() =>
+      DecompositionGeneratedEventSchema.parse({
+        ...baseEvent,
+        subtasks: [{ title: "Test", files: ["test.ts"], priority: -1 }],
+      }),
+    ).toThrow();
+
+    // Invalid: 4
+    expect(() =>
+      DecompositionGeneratedEventSchema.parse({
+        ...baseEvent,
+        subtasks: [{ title: "Test", files: ["test.ts"], priority: 4 }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects empty subtasks array", () => {
+    const event = {
+      type: "decomposition_generated",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      task: "Test",
+      strategy: "file-based",
+      epic_title: "Test",
+      subtasks: [],
+    };
+    // Empty subtasks is valid per schema but semantically questionable
+    expect(() => DecompositionGeneratedEventSchema.parse(event)).not.toThrow();
+  });
+});
+
+describe("SubtaskOutcomeEventSchema", () => {
+  it("validates a complete subtask_outcome event", () => {
+    const event = {
+      type: "subtask_outcome",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      bead_id: "bd-123.1",
+      planned_files: ["src/auth.ts", "src/config.ts"],
+      actual_files: ["src/auth.ts", "src/config.ts", "src/utils.ts"],
+      duration_ms: 45000,
+      error_count: 2,
+      retry_count: 1,
+      success: true,
+    };
+    expect(() => SubtaskOutcomeEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("applies defaults for error_count and retry_count", () => {
+    const event = {
+      type: "subtask_outcome",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      bead_id: "bd-123.1",
+      planned_files: ["src/auth.ts"],
+      actual_files: ["src/auth.ts"],
+      duration_ms: 10000,
+      success: true,
+    };
+    const parsed = SubtaskOutcomeEventSchema.parse(event);
+    expect(parsed.error_count).toBe(0);
+    expect(parsed.retry_count).toBe(0);
+  });
+
+  it("validates duration_ms is non-negative", () => {
+    const baseEvent = {
+      type: "subtask_outcome",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      bead_id: "bd-123.1",
+      planned_files: ["test.ts"],
+      actual_files: ["test.ts"],
+      success: true,
+    };
+
+    // Valid: 0
+    expect(() =>
+      SubtaskOutcomeEventSchema.parse({ ...baseEvent, duration_ms: 0 }),
+    ).not.toThrow();
+
+    // Valid: positive
+    expect(() =>
+      SubtaskOutcomeEventSchema.parse({ ...baseEvent, duration_ms: 1000 }),
+    ).not.toThrow();
+
+    // Invalid: negative
+    expect(() =>
+      SubtaskOutcomeEventSchema.parse({ ...baseEvent, duration_ms: -1 }),
+    ).toThrow();
+  });
+
+  it("validates error_count is non-negative", () => {
+    const baseEvent = {
+      type: "subtask_outcome",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      bead_id: "bd-123.1",
+      planned_files: ["test.ts"],
+      actual_files: ["test.ts"],
+      duration_ms: 1000,
+      success: true,
+    };
+
+    // Invalid: negative
+    expect(() =>
+      SubtaskOutcomeEventSchema.parse({ ...baseEvent, error_count: -1 }),
+    ).toThrow();
+  });
+
+  it("handles file lists with different lengths", () => {
+    const event = {
+      type: "subtask_outcome",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      bead_id: "bd-123.1",
+      planned_files: ["a.ts", "b.ts"],
+      actual_files: ["a.ts", "b.ts", "c.ts", "d.ts"],
+      duration_ms: 5000,
+      success: true,
+    };
+    expect(() => SubtaskOutcomeEventSchema.parse(event)).not.toThrow();
+  });
+});
+
+describe("HumanFeedbackEventSchema", () => {
+  it("validates a complete human_feedback event", () => {
+    const event = {
+      type: "human_feedback",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      accepted: true,
+      modified: false,
+      notes: "Looks good, no changes needed",
+    };
+    expect(() => HumanFeedbackEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("validates accepted with modification", () => {
+    const event = {
+      type: "human_feedback",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      accepted: true,
+      modified: true,
+      notes: "Changed priority on subtask 2",
+    };
+    expect(() => HumanFeedbackEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("validates rejected feedback", () => {
+    const event = {
+      type: "human_feedback",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      accepted: false,
+      modified: false,
+      notes: "Decomposition too granular, needs consolidation",
+    };
+    expect(() => HumanFeedbackEventSchema.parse(event)).not.toThrow();
+  });
+
+  it("applies default for modified", () => {
+    const event = {
+      type: "human_feedback",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      accepted: true,
+    };
+    const parsed = HumanFeedbackEventSchema.parse(event);
+    expect(parsed.modified).toBe(false);
+  });
+
+  it("validates without notes", () => {
+    const event = {
+      type: "human_feedback",
+      project_key: "/test/project",
+      timestamp: Date.now(),
+      epic_id: "bd-123",
+      accepted: true,
+      modified: false,
+    };
+    expect(() => HumanFeedbackEventSchema.parse(event)).not.toThrow();
   });
 });
 

@@ -54,65 +54,17 @@ export const subtaskIndependence = createScorer({
   },
 });
 
-/**
- * Checks that subtask complexity is roughly balanced
- *
- * Unbalanced complexity leads to:
- * - Some agents finishing early and idling
- * - Bottlenecks on complex subtasks
- * - Inefficient resource utilization
- *
- * Score: 1.0 if perfectly balanced, decreases with variance
- * Coefficient of variation (CV) < 0.3 is considered good
- */
-export const complexityBalance = createScorer({
-  name: "Complexity Balance",
-  description: "Checks that subtask complexity is roughly balanced",
-  scorer: ({ output }) => {
-    try {
-      const beadTree = JSON.parse(String(output)) as BeadTree;
+// ============================================================================
+// Outcome-based scorers
+// ============================================================================
 
-      if (beadTree.subtasks.length === 0) {
-        return {
-          score: 0,
-          message: "No subtasks found",
-        };
-      }
-
-      // Get complexity scores
-      const complexities = beadTree.subtasks.map(
-        (st) => st.estimated_complexity || 1,
-      );
-
-      // Calculate mean and standard deviation
-      const mean =
-        complexities.reduce((sum, c) => sum + c, 0) / complexities.length;
-      const variance =
-        complexities.reduce((sum, c) => sum + (c - mean) ** 2, 0) /
-        complexities.length;
-      const stdDev = Math.sqrt(variance);
-
-      // Coefficient of variation (CV) - normalized measure of dispersion
-      const cv = stdDev / mean;
-
-      // Score: 1.0 if CV < 0.3 (good), decreases linearly to 0 at CV = 1.0
-      let score = 1.0;
-      if (cv > 0.3) {
-        score = Math.max(0, 1.0 - (cv - 0.3) / 0.7);
-      }
-
-      return {
-        score,
-        message: `CV=${cv.toFixed(2)} (mean=${mean.toFixed(1)}, σ=${stdDev.toFixed(1)})`,
-      };
-    } catch (error) {
-      return {
-        score: 0,
-        message: `Failed to parse BeadTree: ${error}`,
-      };
-    }
-  },
-});
+export {
+  executionSuccess,
+  timeBalance,
+  scopeAccuracy,
+  scopeDrift,
+  noRework,
+} from "./outcome-scorers.js";
 
 /**
  * Checks that subtasks cover the full task scope

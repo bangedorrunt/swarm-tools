@@ -1,3 +1,5 @@
+prefer tdd
+
 # Subagent Coordination Patterns Analysis
 
 **Source:** obra/superpowers repository  

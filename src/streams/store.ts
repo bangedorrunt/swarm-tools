@@ -531,6 +531,19 @@ async function updateMaterializedViews(
       case "task_blocked":
         // No-op for now - could add task tracking table later
         break;
+
+      // Eval capture events - update eval_records projection
+      case "decomposition_generated":
+        await handleDecompositionGenerated(db, event);
+        break;
+
+      case "subtask_outcome":
+        await handleSubtaskOutcome(db, event);
+        break;
+
+      case "human_feedback":
+        await handleHumanFeedback(db, event);
+        break;
     }
   } catch (error) {
     console.error("[SwarmMail] Failed to update materialized views", {
@@ -705,6 +718,203 @@ async function handleFileReleased(
       [event.timestamp, event.project_key, event.agent_name],
     );
   }
+}
+
+async function handleDecompositionGenerated(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  event: AgentEvent & { id: number; sequence: number },
+): Promise<void> {
+  if (event.type !== "decomposition_generated") return;
+
+  await db.query(
+    `INSERT INTO eval_records (
+      id, project_key, task, context, strategy, epic_title, subtasks, 
+      created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+    ON CONFLICT (id) DO NOTHING`,
+    [
+      event.epic_id,
+      event.project_key,
+      event.task,
+      event.context || null,
+      event.strategy,
+      event.epic_title,
+      JSON.stringify(event.subtasks),
+      event.timestamp,
+    ],
+  );
+}
+
+async function handleSubtaskOutcome(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  event: AgentEvent & { id: number; sequence: number },
+): Promise<void> {
+  if (event.type !== "subtask_outcome") return;
+
+  // Fetch current record to compute metrics
+  const result = await db.query<{
+    outcomes: string | null;
+    subtasks: string;
+  }>(`SELECT outcomes, subtasks FROM eval_records WHERE id = $1`, [
+    event.epic_id,
+  ]);
+
+  if (!result.rows[0]) {
+    console.warn(
+      `[SwarmMail] No eval_record found for epic_id ${event.epic_id}`,
+    );
+    return;
+  }
+
+  const row = result.rows[0];
+  // PGlite returns JSONB columns as already-parsed objects
+  const subtasks = (
+    typeof row.subtasks === "string" ? JSON.parse(row.subtasks) : row.subtasks
+  ) as Array<{
+    title: string;
+    files: string[];
+  }>;
+  const outcomes = row.outcomes
+    ? ((typeof row.outcomes === "string"
+        ? JSON.parse(row.outcomes)
+        : row.outcomes) as Array<{
+        bead_id: string;
+        planned_files: string[];
+        actual_files: string[];
+        duration_ms: number;
+        error_count: number;
+        retry_count: number;
+        success: boolean;
+      }>)
+    : [];
+
+  // Create new outcome
+  const newOutcome = {
+    bead_id: event.bead_id,
+    planned_files: event.planned_files,
+    actual_files: event.actual_files,
+    duration_ms: event.duration_ms,
+    error_count: event.error_count,
+    retry_count: event.retry_count,
+    success: event.success,
+  };
+
+  // Append to outcomes array
+  const updatedOutcomes = [...outcomes, newOutcome];
+
+  // Compute metrics
+  const fileOverlapCount = computeFileOverlap(subtasks);
+  const scopeAccuracy = computeScopeAccuracy(
+    event.planned_files,
+    event.actual_files,
+  );
+  const timeBalanceRatio = computeTimeBalanceRatio(updatedOutcomes);
+  const overallSuccess = updatedOutcomes.every((o) => o.success);
+  const totalDurationMs = updatedOutcomes.reduce(
+    (sum, o) => sum + o.duration_ms,
+    0,
+  );
+  const totalErrors = updatedOutcomes.reduce(
+    (sum, o) => sum + o.error_count,
+    0,
+  );
+
+  // Update record
+  await db.query(
+    `UPDATE eval_records SET
+      outcomes = $1,
+      file_overlap_count = $2,
+      scope_accuracy = $3,
+      time_balance_ratio = $4,
+      overall_success = $5,
+      total_duration_ms = $6,
+      total_errors = $7,
+      updated_at = $8
+    WHERE id = $9`,
+    [
+      JSON.stringify(updatedOutcomes),
+      fileOverlapCount,
+      scopeAccuracy,
+      timeBalanceRatio,
+      overallSuccess,
+      totalDurationMs,
+      totalErrors,
+      event.timestamp,
+      event.epic_id,
+    ],
+  );
+}
+
+async function handleHumanFeedback(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  event: AgentEvent & { id: number; sequence: number },
+): Promise<void> {
+  if (event.type !== "human_feedback") return;
+
+  await db.query(
+    `UPDATE eval_records SET
+      human_accepted = $1,
+      human_modified = $2,
+      human_notes = $3,
+      updated_at = $4
+    WHERE id = $5`,
+    [
+      event.accepted,
+      event.modified,
+      event.notes || null,
+      event.timestamp,
+      event.epic_id,
+    ],
+  );
+}
+
+// ============================================================================
+// Metric Computation Helpers
+// ============================================================================
+
+/**
+ * Count files that appear in multiple subtasks
+ */
+function computeFileOverlap(subtasks: Array<{ files: string[] }>): number {
+  const fileCount = new Map<string, number>();
+
+  for (const subtask of subtasks) {
+    for (const file of subtask.files) {
+      fileCount.set(file, (fileCount.get(file) || 0) + 1);
+    }
+  }
+
+  return Array.from(fileCount.values()).filter((count) => count > 1).length;
+}
+
+/**
+ * Compute scope accuracy: intersection(actual, planned) / planned.length
+ */
+function computeScopeAccuracy(planned: string[], actual: string[]): number {
+  if (planned.length === 0) return 1.0;
+
+  const plannedSet = new Set(planned);
+  const intersection = actual.filter((file) => plannedSet.has(file));
+
+  return intersection.length / planned.length;
+}
+
+/**
+ * Compute time balance ratio: max(duration) / min(duration)
+ * Lower is better (more balanced)
+ */
+function computeTimeBalanceRatio(
+  outcomes: Array<{ duration_ms: number }>,
+): number | null {
+  if (outcomes.length === 0) return null;
+
+  const durations = outcomes.map((o) => o.duration_ms);
+  const max = Math.max(...durations);
+  const min = Math.min(...durations);
+
+  if (min === 0) return null;
+
+  return max / min;
 }
 
 // ============================================================================

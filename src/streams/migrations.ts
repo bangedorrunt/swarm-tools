@@ -107,6 +107,36 @@ export const migrations: Migration[] = [
     `,
     down: `DROP TABLE IF EXISTS deferred;`,
   },
+  {
+    version: 3,
+    description: "Add eval_records table for learning system",
+    up: `
+      CREATE TABLE IF NOT EXISTS eval_records (
+        id TEXT PRIMARY KEY,
+        project_key TEXT NOT NULL,
+        task TEXT NOT NULL,
+        context TEXT,
+        strategy TEXT NOT NULL,
+        epic_title TEXT NOT NULL,
+        subtasks JSONB NOT NULL,
+        outcomes JSONB,
+        overall_success BOOLEAN,
+        total_duration_ms INTEGER,
+        total_errors INTEGER,
+        human_accepted BOOLEAN,
+        human_modified BOOLEAN,
+        human_notes TEXT,
+        file_overlap_count INTEGER,
+        scope_accuracy REAL,
+        time_balance_ratio REAL,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_eval_records_project ON eval_records(project_key);
+      CREATE INDEX IF NOT EXISTS idx_eval_records_strategy ON eval_records(strategy);
+    `,
+    down: `DROP TABLE IF EXISTS eval_records;`,
+  },
 ];
 
 // ============================================================================

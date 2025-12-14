@@ -104,6 +104,8 @@ import {
   type BeadCreateArgs,
   type EpicCreateResult,
 } from "./schemas";
+import { createEvent } from "./streams/events";
+import { appendEvent } from "./streams/store";
 
 /**
  * Custom error for bead operations
@@ -321,6 +323,18 @@ export const beads_create_epic = tool({
         }),
       )
       .describe("Subtasks to create under the epic"),
+    strategy: tool.schema
+      .enum(["file-based", "feature-based", "risk-based"])
+      .optional()
+      .describe("Decomposition strategy used (default: feature-based)"),
+    task: tool.schema
+      .string()
+      .optional()
+      .describe("Original task description that was decomposed"),
+    project_key: tool.schema
+      .string()
+      .optional()
+      .describe("Project path for event emission"),
   },
   async execute(args, ctx) {
     const validated = EpicCreateArgsSchema.parse(args);
@@ -385,6 +399,32 @@ export const beads_create_epic = tool({
         epic,
         subtasks: created.slice(1),
       };
+
+      // Emit DecompositionGeneratedEvent for learning system
+      if (args.project_key) {
+        try {
+          const event = createEvent("decomposition_generated", {
+            project_key: args.project_key,
+            epic_id: epic.id,
+            task: args.task || validated.epic_title,
+            context: validated.epic_description,
+            strategy: args.strategy || "feature-based",
+            epic_title: validated.epic_title,
+            subtasks: validated.subtasks.map((st) => ({
+              title: st.title,
+              files: st.files || [],
+              priority: st.priority,
+            })),
+          });
+          await appendEvent(event, args.project_key);
+        } catch (error) {
+          // Non-fatal - log and continue
+          console.warn(
+            "[beads_create_epic] Failed to emit DecompositionGeneratedEvent:",
+            error,
+          );
+        }
+      }
 
       return JSON.stringify(result, null, 2);
     } catch (error) {
