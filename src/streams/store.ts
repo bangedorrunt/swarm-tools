@@ -5,6 +5,7 @@
  * - append(): Add events to the log
  * - read(): Read events with filters
  * - replay(): Rebuild state from events
+ * - replayBatched(): Rebuild state with pagination (for large logs)
  *
  * All state changes go through events. Projections compute current state.
  */
@@ -16,6 +17,40 @@ import {
   type MessageSentEvent,
   type FileReservedEvent,
 } from "./events";
+
+// ============================================================================
+// Timestamp Parsing
+// ============================================================================
+
+/**
+ * Maximum safe timestamp before integer overflow (approximately year 2286)
+ * PostgreSQL BIGINT can exceed JavaScript's MAX_SAFE_INTEGER (2^53-1)
+ */
+const TIMESTAMP_SAFE_UNTIL = new Date("2286-01-01").getTime();
+
+/**
+ * Parse timestamp from database row.
+ *
+ * NOTE: Timestamps are stored as BIGINT but parsed as JavaScript number.
+ * This is safe for dates before year 2286 (MAX_SAFE_INTEGER = 9007199254740991).
+ * For timestamps beyond this range, use BigInt parsing.
+ *
+ * @param timestamp String representation of Unix timestamp in milliseconds
+ * @returns JavaScript number (safe for dates before 2286)
+ * @throws Error if timestamp is not a valid number
+ */
+function parseTimestamp(timestamp: string): number {
+  const ts = parseInt(timestamp, 10);
+  if (Number.isNaN(ts)) {
+    throw new Error(`[SwarmMail] Invalid timestamp: ${timestamp}`);
+  }
+  if (ts > Number.MAX_SAFE_INTEGER) {
+    console.warn(
+      `[SwarmMail] Timestamp ${timestamp} exceeds MAX_SAFE_INTEGER (year 2286+), precision may be lost`,
+    );
+  }
+  return ts;
+}
 
 // ============================================================================
 // Event Store Operations
@@ -196,7 +231,7 @@ export async function readEvents(
       id: row.id,
       type: row.type as AgentEvent["type"],
       project_key: row.project_key,
-      timestamp: parseInt(row.timestamp as string),
+      timestamp: parseTimestamp(row.timestamp as string),
       sequence: row.sequence,
       ...data,
     } as AgentEvent & { id: number; sequence: number };
@@ -286,6 +321,118 @@ export async function replayEvents(
 
   return {
     eventsReplayed: events.length,
+    duration: Date.now() - startTime,
+  };
+}
+
+/**
+ * Replay events in batches to avoid OOM
+ *
+ * For large event logs (>100k events), use this instead of replayEvents()
+ * to keep memory usage constant.
+ *
+ * Example:
+ * ```typescript
+ * const result = await replayEventsBatched(
+ *   "my-project",
+ *   async (events, progress) => {
+ *     console.log(`Replayed ${progress.processed}/${progress.total} (${progress.percent}%)`);
+ *   },
+ *   { batchSize: 1000, clearViews: true },
+ *   "/path/to/project"
+ * );
+ * console.log(`Replayed ${result.eventsReplayed} events in ${result.duration}ms`);
+ * ```
+ *
+ * @param projectKey Project key to filter events
+ * @param onBatch Callback invoked for each batch with progress
+ * @param options Configuration options
+ * @param options.batchSize Number of events per batch (default 1000)
+ * @param options.fromSequence Start from this sequence number (default 0)
+ * @param options.clearViews Clear materialized views before replay (default false)
+ * @param projectPath Path to project database
+ */
+export async function replayEventsBatched(
+  projectKey: string,
+  onBatch: (
+    events: Array<AgentEvent & { id: number; sequence: number }>,
+    progress: { processed: number; total: number; percent: number },
+  ) => Promise<void>,
+  options: {
+    batchSize?: number;
+    fromSequence?: number;
+    clearViews?: boolean;
+  } = {},
+  projectPath?: string,
+): Promise<{ eventsReplayed: number; duration: number }> {
+  const startTime = Date.now();
+  const batchSize = options.batchSize ?? 1000;
+  const fromSequence = options.fromSequence ?? 0;
+  const db = await getDatabase(projectPath);
+
+  // Optionally clear materialized views
+  if (options.clearViews) {
+    await db.query(
+      `DELETE FROM message_recipients WHERE message_id IN (
+        SELECT id FROM messages WHERE project_key = $1
+      )`,
+      [projectKey],
+    );
+    await db.query(`DELETE FROM messages WHERE project_key = $1`, [projectKey]);
+    await db.query(`DELETE FROM reservations WHERE project_key = $1`, [
+      projectKey,
+    ]);
+    await db.query(`DELETE FROM agents WHERE project_key = $1`, [projectKey]);
+  }
+
+  // Get total count first
+  const countResult = await db.query<{ count: string }>(
+    `SELECT COUNT(*) as count FROM events WHERE project_key = $1 AND sequence > $2`,
+    [projectKey, fromSequence],
+  );
+  const total = parseInt(countResult.rows[0]?.count ?? "0");
+
+  if (total === 0) {
+    return { eventsReplayed: 0, duration: Date.now() - startTime };
+  }
+
+  let processed = 0;
+  let offset = 0;
+
+  while (processed < total) {
+    // Fetch batch
+    const events = await readEvents(
+      {
+        projectKey,
+        afterSequence: fromSequence,
+        limit: batchSize,
+        offset,
+      },
+      projectPath,
+    );
+
+    if (events.length === 0) break;
+
+    // Update materialized views for this batch
+    for (const event of events) {
+      await updateMaterializedViews(db, event);
+    }
+
+    processed += events.length;
+    const percent = Math.round((processed / total) * 100);
+
+    // Report progress
+    await onBatch(events, { processed, total, percent });
+
+    console.log(
+      `[SwarmMail] Replaying events: ${processed}/${total} (${percent}%)`,
+    );
+
+    offset += batchSize;
+  }
+
+  return {
+    eventsReplayed: processed,
     duration: Date.now() - startTime,
   };
 }

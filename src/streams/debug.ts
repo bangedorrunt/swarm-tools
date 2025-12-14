@@ -5,7 +5,7 @@
  * Useful for debugging issues and understanding system behavior.
  */
 import { getDatabase, getDatabaseStats } from "./index";
-import { readEvents, getLatestSequence } from "./store";
+import { readEvents, getLatestSequence, replayEventsBatched } from "./store";
 import { getAgent, getActiveReservations, getMessage } from "./projections";
 import type { AgentEvent } from "./events";
 
@@ -231,11 +231,27 @@ function getAgentFromEvent(event: AgentEvent): string {
 
 /**
  * Get recent events with filtering
+ *
+ * For large event logs (>100k events), consider using batchSize option
+ * to paginate through results instead of loading all events.
  */
 export async function debugEvents(
-  options: DebugEventsOptions,
+  options: DebugEventsOptions & { batchSize?: number },
 ): Promise<DebugEventsResult> {
-  const { projectPath, types, agentName, limit = 50, since, until } = options;
+  const {
+    projectPath,
+    types,
+    agentName,
+    limit = 50,
+    since,
+    until,
+    batchSize,
+  } = options;
+
+  // If batchSize is specified, use pagination to avoid OOM
+  if (batchSize && batchSize > 0) {
+    return await debugEventsPaginated({ ...options, batchSize });
+  }
 
   // Get all events first (we'll filter in memory for agent name)
   const allEvents = await readEvents(
@@ -281,6 +297,88 @@ export async function debugEvents(
   return {
     events,
     total: filteredEvents.length,
+  };
+}
+
+/**
+ * Get events using pagination to avoid OOM on large logs
+ */
+async function debugEventsPaginated(
+  options: DebugEventsOptions & { batchSize: number },
+): Promise<DebugEventsResult> {
+  const {
+    projectPath,
+    types,
+    agentName,
+    limit = 50,
+    since,
+    until,
+    batchSize,
+  } = options;
+
+  const allEvents: Array<AgentEvent & { id: number; sequence: number }> = [];
+  let offset = 0;
+  let hasMore = true;
+
+  // Fetch in batches until we have enough events or run out
+  while (hasMore && allEvents.length < limit) {
+    const batch = await readEvents(
+      {
+        projectKey: projectPath,
+        types,
+        since,
+        until,
+        limit: batchSize,
+        offset,
+      },
+      projectPath,
+    );
+
+    if (batch.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    // Filter by agent name if specified
+    const filtered = agentName
+      ? batch.filter((e) => {
+          if ("agent_name" in e && e.agent_name === agentName) return true;
+          if ("from_agent" in e && e.from_agent === agentName) return true;
+          if ("to_agents" in e && e.to_agents?.includes(agentName)) return true;
+          return false;
+        })
+      : batch;
+
+    allEvents.push(...filtered);
+    offset += batchSize;
+
+    console.log(
+      `[SwarmMail] Fetched ${allEvents.length} events (batch size: ${batchSize})`,
+    );
+  }
+
+  // Sort by sequence descending (most recent first)
+  allEvents.sort((a, b) => b.sequence - a.sequence);
+
+  // Apply limit
+  const limitedEvents = allEvents.slice(0, limit);
+
+  // Format for output
+  const events: DebugEventResult[] = limitedEvents.map((e) => {
+    const { id, sequence, type, timestamp, project_key, ...rest } = e;
+    return {
+      id,
+      sequence,
+      type,
+      timestamp,
+      timestamp_human: formatTimestamp(timestamp),
+      ...rest,
+    };
+  });
+
+  return {
+    events,
+    total: allEvents.length,
   };
 }
 

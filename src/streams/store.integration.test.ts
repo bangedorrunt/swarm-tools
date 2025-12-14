@@ -17,6 +17,7 @@ import {
   readEvents,
   getLatestSequence,
   replayEvents,
+  replayEventsBatched,
   registerAgent,
   sendMessage,
   reserveFiles,
@@ -340,6 +341,115 @@ describe("Event Store", () => {
         "SELECT task_description FROM agents WHERE name = 'Agent1'",
       );
       expect(restored.rows[0]?.task_description).toBe("Original");
+    });
+  });
+
+  describe("replayEventsBatched", () => {
+    it("should replay events in batches with progress tracking", async () => {
+      // Create 50 events
+      for (let i = 0; i < 50; i++) {
+        await registerAgent(
+          "test-project",
+          `Agent${i}`,
+          { taskDescription: `Agent ${i}` },
+          TEST_PROJECT_PATH,
+        );
+      }
+
+      // Manually corrupt the views
+      const db = await getDatabase(TEST_PROJECT_PATH);
+      await db.query("DELETE FROM agents WHERE project_key = 'test-project'");
+
+      // Verify views are empty
+      const empty = await db.query<{ count: string }>(
+        "SELECT COUNT(*) as count FROM agents WHERE project_key = 'test-project'",
+      );
+      expect(parseInt(empty.rows[0]?.count ?? "0")).toBe(0);
+
+      // Track progress
+      const progressUpdates: Array<{
+        processed: number;
+        total: number;
+        percent: number;
+      }> = [];
+
+      // Replay in batches of 10
+      const result = await replayEventsBatched(
+        "test-project",
+        async (_events, progress) => {
+          progressUpdates.push(progress);
+        },
+        { batchSize: 10, clearViews: false },
+        TEST_PROJECT_PATH,
+      );
+
+      // Verify all events replayed
+      expect(result.eventsReplayed).toBe(50);
+
+      // Verify progress updates
+      expect(progressUpdates.length).toBe(5); // 50 events / 10 per batch = 5 batches
+      expect(progressUpdates[0]).toMatchObject({
+        processed: 10,
+        total: 50,
+        percent: 20,
+      });
+      expect(progressUpdates[4]).toMatchObject({
+        processed: 50,
+        total: 50,
+        percent: 100,
+      });
+
+      // Verify views are restored
+      const restored = await db.query<{ count: string }>(
+        "SELECT COUNT(*) as count FROM agents WHERE project_key = 'test-project'",
+      );
+      expect(parseInt(restored.rows[0]?.count ?? "0")).toBe(50);
+    });
+
+    it("should handle zero events gracefully", async () => {
+      const progressUpdates: Array<{
+        processed: number;
+        total: number;
+        percent: number;
+      }> = [];
+
+      const result = await replayEventsBatched(
+        "test-project",
+        async (_events, progress) => {
+          progressUpdates.push(progress);
+        },
+        { batchSize: 10 },
+        TEST_PROJECT_PATH,
+      );
+
+      expect(result.eventsReplayed).toBe(0);
+      expect(progressUpdates.length).toBe(0);
+    });
+
+    it("should use custom batch size", async () => {
+      // Create 25 events
+      for (let i = 0; i < 25; i++) {
+        await registerAgent("test-project", `Agent${i}`, {}, TEST_PROJECT_PATH);
+      }
+
+      const progressUpdates: Array<{
+        processed: number;
+        total: number;
+        percent: number;
+      }> = [];
+
+      // Replay with batch size of 5
+      await replayEventsBatched(
+        "test-project",
+        async (_events, progress) => {
+          progressUpdates.push(progress);
+        },
+        { batchSize: 5, clearViews: false },
+        TEST_PROJECT_PATH,
+      );
+
+      // Should have 5 batches (25 events / 5 per batch)
+      expect(progressUpdates.length).toBe(5);
     });
   });
 

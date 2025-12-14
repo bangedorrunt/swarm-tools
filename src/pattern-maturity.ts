@@ -210,14 +210,23 @@ export function createPatternMaturity(patternId: string): PatternMaturity {
 }
 
 /**
- * Update pattern maturity with new feedback
+ * Update pattern maturity with new feedback.
  *
- * Records feedback, updates counts, and recalculates state.
+ * Side Effects:
+ * - Sets `promoted_at` timestamp on first entry into 'proven' status
+ * - Sets `deprecated_at` timestamp on first entry into 'deprecated' status
+ * - Updates `helpful_count` and `harmful_count` based on feedback events
+ * - Recalculates `state` based on decayed feedback counts
+ *
+ * State Transitions:
+ * - candidate → established: After minFeedback observations (default 3)
+ * - established → proven: When decayedHelpful >= minHelpful (5) AND harmfulRatio < maxHarmful (15%)
+ * - any → deprecated: When harmfulRatio > deprecationThreshold (30%) AND total >= minFeedback
  *
  * @param maturity - Current maturity record
  * @param feedbackEvents - All feedback events for this pattern
  * @param config - Maturity configuration
- * @returns Updated maturity record
+ * @returns Updated maturity record with new state
  */
 export function updatePatternMaturity(
   maturity: PatternMaturity,
@@ -269,7 +278,16 @@ export function promotePattern(maturity: PatternMaturity): PatternMaturity {
   }
 
   if (maturity.state === "proven") {
-    return maturity; // Already proven
+    console.warn(
+      `[PatternMaturity] Pattern already proven: ${maturity.pattern_id}`,
+    );
+    return maturity; // No-op but warn
+  }
+
+  if (maturity.state === "candidate" && maturity.helpful_count < 3) {
+    console.warn(
+      `[PatternMaturity] Promoting candidate with insufficient data: ${maturity.pattern_id} (${maturity.helpful_count} helpful observations)`,
+    );
   }
 
   const now = new Date().toISOString();
@@ -309,12 +327,16 @@ export function deprecatePattern(
 }
 
 /**
- * Get maturity score multiplier for pattern ranking
+ * Get weight multiplier based on pattern maturity status.
  *
- * Higher maturity patterns should be weighted more heavily.
+ * Multipliers chosen to:
+ * - Heavily penalize deprecated patterns (0x) - never recommend
+ * - Slightly boost proven patterns (1.5x) - reward validated success
+ * - Penalize unvalidated candidates (0.5x) - reduce impact until proven
+ * - Neutral for established (1.0x) - baseline weight
  *
- * @param state - Maturity state
- * @returns Score multiplier (0-1.5)
+ * @param state - Pattern maturity status
+ * @returns Multiplier to apply to pattern weight
  */
 export function getMaturityMultiplier(state: MaturityState): number {
   const multipliers: Record<MaturityState, number> = {
@@ -336,6 +358,12 @@ export function getMaturityMultiplier(state: MaturityState): number {
  */
 export function formatMaturityForPrompt(maturity: PatternMaturity): string {
   const total = maturity.helpful_count + maturity.harmful_count;
+
+  // Don't show percentages for insufficient data
+  if (total < 3) {
+    return `[LIMITED DATA - ${total} observation${total !== 1 ? "s" : ""}]`;
+  }
+
   const harmfulRatio =
     total > 0 ? Math.round((maturity.harmful_count / total) * 100) : 0;
   const helpfulRatio =
