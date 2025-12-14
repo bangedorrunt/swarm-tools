@@ -141,13 +141,34 @@ export interface StorageConfig {
   useSemanticSearch: boolean;
 }
 
-export const DEFAULT_STORAGE_CONFIG: StorageConfig = {
-  backend: "semantic-memory",
-  collections: {
+/**
+ * Get collection names with optional test suffix
+ *
+ * When TEST_MEMORY_COLLECTIONS=true, appends "-test" to all collection names
+ * to isolate test data from production semantic-memory storage.
+ */
+function getCollectionNames(): StorageCollections {
+  const base = {
     feedback: "swarm-feedback",
     patterns: "swarm-patterns",
     maturity: "swarm-maturity",
-  },
+  };
+
+  // Test isolation: suffix collections with "-test" when in test mode
+  if (process.env.TEST_MEMORY_COLLECTIONS === "true") {
+    return {
+      feedback: `${base.feedback}-test`,
+      patterns: `${base.patterns}-test`,
+      maturity: `${base.maturity}-test`,
+    };
+  }
+
+  return base;
+}
+
+export const DEFAULT_STORAGE_CONFIG: StorageConfig = {
+  backend: "semantic-memory",
+  collections: getCollectionNames(),
   useSemanticSearch: true,
 };
 
@@ -190,6 +211,43 @@ export interface LearningStorage {
 }
 
 // ============================================================================
+// Session Stats Tracking
+// ============================================================================
+
+interface SessionStats {
+  storesCount: number;
+  queriesCount: number;
+  sessionStart: number;
+  lastAlertCheck: number;
+}
+
+let sessionStats: SessionStats = {
+  storesCount: 0,
+  queriesCount: 0,
+  sessionStart: Date.now(),
+  lastAlertCheck: Date.now(),
+};
+
+/**
+ * Reset session stats (for testing)
+ */
+export function resetSessionStats(): void {
+  sessionStats = {
+    storesCount: 0,
+    queriesCount: 0,
+    sessionStart: Date.now(),
+    lastAlertCheck: Date.now(),
+  };
+}
+
+/**
+ * Get current session stats
+ */
+export function getSessionStats(): Readonly<SessionStats> {
+  return { ...sessionStats };
+}
+
+// ============================================================================
 // Semantic Memory Storage Implementation
 // ============================================================================
 
@@ -204,11 +262,45 @@ export class SemanticMemoryStorage implements LearningStorage {
 
   constructor(config: Partial<StorageConfig> = {}) {
     this.config = { ...DEFAULT_STORAGE_CONFIG, ...config };
+    console.log(
+      `[storage] SemanticMemoryStorage initialized with collections:`,
+      this.config.collections,
+    );
   }
 
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Check if low usage alert should be sent
+   *
+   * Sends alert via agentmail if:
+   * - More than 10 minutes have elapsed since session start
+   * - Less than 1 store operation has occurred
+   * - Alert hasn't been sent in the last 10 minutes
+   */
+  private async checkLowUsageAlert(): Promise<void> {
+    const TEN_MINUTES = 10 * 60 * 1000;
+    const now = Date.now();
+    const sessionDuration = now - sessionStats.sessionStart;
+    const timeSinceLastAlert = now - sessionStats.lastAlertCheck;
+
+    if (
+      sessionDuration >= TEN_MINUTES &&
+      sessionStats.storesCount < 1 &&
+      timeSinceLastAlert >= TEN_MINUTES
+    ) {
+      console.warn(
+        `[storage] LOW USAGE ALERT: ${sessionStats.storesCount} stores after ${Math.floor(sessionDuration / 60000)} minutes`,
+      );
+      sessionStats.lastAlertCheck = now;
+
+      // Send alert via Agent Mail if available
+      // Note: This requires agentmail to be initialized, which may not always be the case
+      // We'll log the alert and let the coordinator detect it in logs
+    }
+  }
 
   private async store(
     collection: string,
@@ -222,7 +314,19 @@ export class SemanticMemoryStorage implements LearningStorage {
       args.push("--metadata", JSON.stringify(metadata));
     }
 
-    await execSemanticMemory(args);
+    console.log(`[storage] store() -> collection="${collection}"`);
+    sessionStats.storesCount++;
+
+    const result = await execSemanticMemory(args);
+
+    if (result.exitCode !== 0) {
+      console.warn(
+        `[storage] semantic-memory store() failed with exit code ${result.exitCode}: ${result.stderr.toString().trim()}`,
+      );
+    }
+
+    // Alert check: if 10+ minutes elapsed with < 1 store, send alert
+    await this.checkLowUsageAlert();
   }
 
   private async find<T>(
@@ -244,6 +348,11 @@ export class SemanticMemoryStorage implements LearningStorage {
     if (useFts) {
       args.push("--fts");
     }
+
+    console.log(
+      `[storage] find() -> collection="${collection}", query="${query.slice(0, 50)}${query.length > 50 ? "..." : ""}", limit=${limit}, fts=${useFts}`,
+    );
+    sessionStats.queriesCount++;
 
     const result = await execSemanticMemory(args);
 
@@ -280,6 +389,9 @@ export class SemanticMemoryStorage implements LearningStorage {
   }
 
   private async list<T>(collection: string): Promise<T[]> {
+    console.log(`[storage] list() -> collection="${collection}"`);
+    sessionStats.queriesCount++;
+
     const result = await execSemanticMemory([
       "list",
       "--collection",

@@ -1054,22 +1054,30 @@ export const swarm_complete = tool({
       .describe("Number of retry attempts during task"),
   },
   async execute(args) {
-    // Verify agent is registered in swarm-mail
-    // This catches agents who skipped swarmmail_init
-    const projectKey = args.project_key.replace(/\//g, "-").replace(/\\/g, "-");
-    let agentRegistered = false;
-    let registrationWarning = "";
+    // Extract epic ID early for error notifications
+    const epicId = args.bead_id.includes(".")
+      ? args.bead_id.split(".")[0]
+      : args.bead_id;
 
     try {
-      const agent = await getAgent(
-        projectKey,
-        args.agent_name,
-        args.project_key,
-      );
-      agentRegistered = agent !== null;
+      // Verify agent is registered in swarm-mail
+      // This catches agents who skipped swarmmail_init
+      const projectKey = args.project_key
+        .replace(/\//g, "-")
+        .replace(/\\/g, "-");
+      let agentRegistered = false;
+      let registrationWarning = "";
 
-      if (!agentRegistered) {
-        registrationWarning = `⚠️  WARNING: Agent '${args.agent_name}' was NOT registered in swarm-mail for project '${projectKey}'.
+      try {
+        const agent = await getAgent(
+          projectKey,
+          args.agent_name,
+          args.project_key,
+        );
+        agentRegistered = agent !== null;
+
+        if (!agentRegistered) {
+          registrationWarning = `⚠️  WARNING: Agent '${args.agent_name}' was NOT registered in swarm-mail for project '${projectKey}'.
 
 This usually means you skipped the MANDATORY swarmmail_init step.
 
@@ -1083,251 +1091,301 @@ This usually means you skipped the MANDATORY swarmmail_init step.
 
 Continuing with completion, but this should be fixed for future subtasks.`;
 
-        console.warn(`[swarm_complete] ${registrationWarning}`);
+          console.warn(`[swarm_complete] ${registrationWarning}`);
+        }
+      } catch (error) {
+        // Non-fatal - agent might be using legacy workflow
+        console.warn(
+          `[swarm_complete] Could not verify agent registration:`,
+          error,
+        );
+        registrationWarning = `ℹ️  Could not verify swarm-mail registration (database may not be available). Consider running swarmmail_init next time.`;
       }
-    } catch (error) {
-      // Non-fatal - agent might be using legacy workflow
-      console.warn(
-        `[swarm_complete] Could not verify agent registration:`,
-        error,
+
+      // Run Verification Gate unless explicitly skipped
+      let verificationResult: VerificationGateResult | null = null;
+
+      if (!args.skip_verification && args.files_touched?.length) {
+        verificationResult = await runVerificationGate(
+          args.files_touched,
+          args.skip_ubs_scan ?? false,
+        );
+
+        // Block completion if verification failed
+        if (!verificationResult.passed) {
+          return JSON.stringify(
+            {
+              success: false,
+              error: "Verification Gate FAILED - fix issues before completing",
+              verification: {
+                passed: false,
+                summary: verificationResult.summary,
+                blockers: verificationResult.blockers,
+                steps: verificationResult.steps.map((s) => ({
+                  name: s.name,
+                  passed: s.passed,
+                  skipped: s.skipped,
+                  skipReason: s.skipReason,
+                  error: s.error?.slice(0, 200),
+                })),
+              },
+              hint:
+                verificationResult.blockers.length > 0
+                  ? `Fix these issues: ${verificationResult.blockers.map((b, i) => `${i + 1}. ${b}`).join(", ")}. Use skip_verification=true only as last resort.`
+                  : "Fix the failing checks and try again. Use skip_verification=true only as last resort.",
+              gate_function:
+                "IDENTIFY → RUN → READ → VERIFY → CLAIM (you are at VERIFY, claim blocked)",
+            },
+            null,
+            2,
+          );
+        }
+      }
+
+      // Legacy UBS-only path for backward compatibility (when no files_touched)
+      let ubsResult: UbsScanResult | null = null;
+      if (
+        !args.skip_verification &&
+        !verificationResult &&
+        args.files_touched?.length &&
+        !args.skip_ubs_scan
+      ) {
+        ubsResult = await runUbsScan(args.files_touched);
+
+        // Block completion if critical bugs found
+        if (ubsResult && ubsResult.summary.critical > 0) {
+          return JSON.stringify(
+            {
+              success: false,
+              error: `UBS found ${ubsResult.summary.critical} critical bug(s) that must be fixed before completing`,
+              ubs_scan: {
+                critical_count: ubsResult.summary.critical,
+                bugs: ubsResult.bugs.filter((b) => b.severity === "critical"),
+              },
+              hint: `Fix these critical bugs: ${ubsResult.bugs
+                .filter((b) => b.severity === "critical")
+                .map((b) => `${b.file}:${b.line} - ${b.message}`)
+                .slice(0, 3)
+                .join(
+                  "; ",
+                )}. Try: Run 'ubs scan ${args.files_touched?.join(" ") || "."} --json' for full report, fix reported issues, or use skip_ubs_scan=true to bypass (not recommended).`,
+            },
+            null,
+            2,
+          );
+        }
+      }
+
+      // Parse and validate evaluation if provided
+      let parsedEvaluation: Evaluation | undefined;
+      if (args.evaluation) {
+        try {
+          parsedEvaluation = EvaluationSchema.parse(
+            JSON.parse(args.evaluation),
+          );
+        } catch (error) {
+          return JSON.stringify(
+            {
+              success: false,
+              error: "Invalid evaluation format",
+              details:
+                error instanceof z.ZodError ? error.issues : String(error),
+            },
+            null,
+            2,
+          );
+        }
+
+        // If evaluation failed, don't complete
+        if (!parsedEvaluation.passed) {
+          return JSON.stringify(
+            {
+              success: false,
+              error: "Self-evaluation failed",
+              retry_suggestion: parsedEvaluation.retry_suggestion,
+              feedback: parsedEvaluation.overall_feedback,
+            },
+            null,
+            2,
+          );
+        }
+      }
+
+      // Close the bead
+      const closeResult =
+        await Bun.$`bd close ${args.bead_id} --reason ${args.summary} --json`
+          .quiet()
+          .nothrow();
+
+      if (closeResult.exitCode !== 0) {
+        throw new Error(
+          `Failed to close bead because bd close command failed: ${closeResult.stderr.toString()}. Try: Verify bead exists and is not already closed with 'bd show ${args.bead_id}', check if bead ID is correct with 'beads_query()', or use beads_close tool directly.`,
+        );
+      }
+
+      // Emit SubtaskOutcomeEvent for learning system
+      try {
+        const epicId = args.bead_id.includes(".")
+          ? args.bead_id.split(".")[0]
+          : args.bead_id;
+
+        const durationMs = args.start_time ? Date.now() - args.start_time : 0;
+
+        const event = createEvent("subtask_outcome", {
+          project_key: args.project_key,
+          epic_id: epicId,
+          bead_id: args.bead_id,
+          planned_files: args.planned_files || [],
+          actual_files: args.files_touched || [],
+          duration_ms: durationMs,
+          error_count: args.error_count || 0,
+          retry_count: args.retry_count || 0,
+          success: true,
+        });
+        await appendEvent(event, args.project_key);
+      } catch (error) {
+        // Non-fatal - log and continue
+        console.warn(
+          "[swarm_complete] Failed to emit SubtaskOutcomeEvent:",
+          error,
+        );
+      }
+
+      // Automatic memory capture (MANDATORY on successful completion)
+      // Extract strategy from bead metadata if available
+      let capturedStrategy: LearningDecompositionStrategy | undefined;
+      const durationMs = args.start_time ? Date.now() - args.start_time : 0;
+
+      // Build memory information from task completion
+      const memoryInfo = formatMemoryStoreOnSuccess(
+        args.bead_id,
+        args.summary,
+        args.files_touched || [],
+        capturedStrategy,
       );
-      registrationWarning = `ℹ️  Could not verify swarm-mail registration (database may not be available). Consider running swarmmail_init next time.`;
-    }
 
-    // Run Verification Gate unless explicitly skipped
-    let verificationResult: VerificationGateResult | null = null;
+      let memoryStored = false;
+      let memoryError: string | undefined;
 
-    if (!args.skip_verification && args.files_touched?.length) {
-      verificationResult = await runVerificationGate(
-        args.files_touched,
-        args.skip_ubs_scan ?? false,
-      );
+      // Attempt to store in semantic-memory (non-blocking)
+      try {
+        const memoryAvailable = await isToolAvailable("semantic-memory");
+        if (memoryAvailable) {
+          // Call semantic-memory store command
+          const storeResult =
+            await Bun.$`semantic-memory store ${memoryInfo.information} --metadata ${memoryInfo.metadata}`
+              .quiet()
+              .nothrow();
 
-      // Block completion if verification failed
-      if (!verificationResult.passed) {
-        return JSON.stringify(
-          {
-            success: false,
-            error: "Verification Gate FAILED - fix issues before completing",
-            verification: {
-              passed: false,
+          if (storeResult.exitCode === 0) {
+            memoryStored = true;
+            console.log(
+              `[swarm_complete] Stored learning for ${args.bead_id} in semantic-memory`,
+            );
+          } else {
+            memoryError = `semantic-memory store failed: ${storeResult.stderr.toString().slice(0, 200)}`;
+            console.warn(`[swarm_complete] ${memoryError}`);
+          }
+        } else {
+          memoryError =
+            "semantic-memory not available - learning stored in-memory only";
+          warnMissingTool("semantic-memory");
+        }
+      } catch (error) {
+        memoryError = `Failed to store memory: ${error instanceof Error ? error.message : String(error)}`;
+        console.warn(`[swarm_complete] ${memoryError}`);
+      }
+
+      // Release file reservations for this agent using embedded swarm-mail
+      try {
+        await releaseSwarmFiles({
+          projectPath: args.project_key,
+          agentName: args.agent_name,
+          // Release all reservations for this agent
+        });
+      } catch (error) {
+        // Release might fail (e.g., no reservations existed)
+        // This is non-fatal - log and continue
+        console.warn(
+          `[swarm] Failed to release file reservations for ${args.agent_name}:`,
+          error,
+        );
+      }
+
+      // Extract epic ID
+      const epicId = args.bead_id.includes(".")
+        ? args.bead_id.split(".")[0]
+        : args.bead_id;
+
+      // Send completion message using embedded swarm-mail with memory capture status
+      const completionBody = [
+        `## Subtask Complete: ${args.bead_id}`,
+        "",
+        `**Summary**: ${args.summary}`,
+        "",
+        parsedEvaluation
+          ? `**Self-Evaluation**: ${parsedEvaluation.passed ? "PASSED" : "FAILED"}`
+          : "",
+        parsedEvaluation?.overall_feedback
+          ? `**Feedback**: ${parsedEvaluation.overall_feedback}`
+          : "",
+        "",
+        `**Memory Capture**: ${memoryStored ? "✓ Stored in semantic-memory" : `✗ ${memoryError || "Failed"}`}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      await sendSwarmMessage({
+        projectPath: args.project_key,
+        fromAgent: args.agent_name,
+        toAgents: [], // Thread broadcast
+        subject: `Complete: ${args.bead_id}`,
+        body: completionBody,
+        threadId: epicId,
+        importance: "normal",
+      });
+
+      // Build success response with semantic-memory integration
+      const response = {
+        success: true,
+        bead_id: args.bead_id,
+        closed: true,
+        reservations_released: true,
+        message_sent: true,
+        agent_registration: {
+          verified: agentRegistered,
+          warning: registrationWarning || undefined,
+        },
+        verification_gate: verificationResult
+          ? {
+              passed: true,
               summary: verificationResult.summary,
-              blockers: verificationResult.blockers,
               steps: verificationResult.steps.map((s) => ({
                 name: s.name,
                 passed: s.passed,
                 skipped: s.skipped,
                 skipReason: s.skipReason,
-                error: s.error?.slice(0, 200),
               })),
-            },
-            hint:
-              verificationResult.blockers.length > 0
-                ? `Fix these issues: ${verificationResult.blockers.map((b, i) => `${i + 1}. ${b}`).join(", ")}. Use skip_verification=true only as last resort.`
-                : "Fix the failing checks and try again. Use skip_verification=true only as last resort.",
-            gate_function:
-              "IDENTIFY → RUN → READ → VERIFY → CLAIM (you are at VERIFY, claim blocked)",
-          },
-          null,
-          2,
-        );
-      }
-    }
-
-    // Legacy UBS-only path for backward compatibility (when no files_touched)
-    let ubsResult: UbsScanResult | null = null;
-    if (
-      !args.skip_verification &&
-      !verificationResult &&
-      args.files_touched?.length &&
-      !args.skip_ubs_scan
-    ) {
-      ubsResult = await runUbsScan(args.files_touched);
-
-      // Block completion if critical bugs found
-      if (ubsResult && ubsResult.summary.critical > 0) {
-        return JSON.stringify(
-          {
-            success: false,
-            error: `UBS found ${ubsResult.summary.critical} critical bug(s) that must be fixed before completing`,
-            ubs_scan: {
-              critical_count: ubsResult.summary.critical,
-              bugs: ubsResult.bugs.filter((b) => b.severity === "critical"),
-            },
-            hint: `Fix these critical bugs: ${ubsResult.bugs
-              .filter((b) => b.severity === "critical")
-              .map((b) => `${b.file}:${b.line} - ${b.message}`)
-              .slice(0, 3)
-              .join(
-                "; ",
-              )}. Try: Run 'ubs scan ${args.files_touched?.join(" ") || "."} --json' for full report, fix reported issues, or use skip_ubs_scan=true to bypass (not recommended).`,
-          },
-          null,
-          2,
-        );
-      }
-    }
-
-    // Parse and validate evaluation if provided
-    let parsedEvaluation: Evaluation | undefined;
-    if (args.evaluation) {
-      try {
-        parsedEvaluation = EvaluationSchema.parse(JSON.parse(args.evaluation));
-      } catch (error) {
-        return JSON.stringify(
-          {
-            success: false,
-            error: "Invalid evaluation format",
-            details: error instanceof z.ZodError ? error.issues : String(error),
-          },
-          null,
-          2,
-        );
-      }
-
-      // If evaluation failed, don't complete
-      if (!parsedEvaluation.passed) {
-        return JSON.stringify(
-          {
-            success: false,
-            error: "Self-evaluation failed",
-            retry_suggestion: parsedEvaluation.retry_suggestion,
-            feedback: parsedEvaluation.overall_feedback,
-          },
-          null,
-          2,
-        );
-      }
-    }
-
-    // Close the bead
-    const closeResult =
-      await Bun.$`bd close ${args.bead_id} --reason ${args.summary} --json`
-        .quiet()
-        .nothrow();
-
-    if (closeResult.exitCode !== 0) {
-      throw new Error(
-        `Failed to close bead because bd close command failed: ${closeResult.stderr.toString()}. Try: Verify bead exists and is not already closed with 'bd show ${args.bead_id}', check if bead ID is correct with 'beads_query()', or use beads_close tool directly.`,
-      );
-    }
-
-    // Emit SubtaskOutcomeEvent for learning system
-    try {
-      const epicId = args.bead_id.includes(".")
-        ? args.bead_id.split(".")[0]
-        : args.bead_id;
-
-      const durationMs = args.start_time ? Date.now() - args.start_time : 0;
-
-      const event = createEvent("subtask_outcome", {
-        project_key: args.project_key,
-        epic_id: epicId,
-        bead_id: args.bead_id,
-        planned_files: args.planned_files || [],
-        actual_files: args.files_touched || [],
-        duration_ms: durationMs,
-        error_count: args.error_count || 0,
-        retry_count: args.retry_count || 0,
-        success: true,
-      });
-      await appendEvent(event, args.project_key);
-    } catch (error) {
-      // Non-fatal - log and continue
-      console.warn(
-        "[swarm_complete] Failed to emit SubtaskOutcomeEvent:",
-        error,
-      );
-    }
-
-    // Release file reservations for this agent using embedded swarm-mail
-    try {
-      await releaseSwarmFiles({
-        projectPath: args.project_key,
-        agentName: args.agent_name,
-        // Release all reservations for this agent
-      });
-    } catch (error) {
-      // Release might fail (e.g., no reservations existed)
-      // This is non-fatal - log and continue
-      console.warn(
-        `[swarm] Failed to release file reservations for ${args.agent_name}:`,
-        error,
-      );
-    }
-
-    // Extract epic ID
-    const epicId = args.bead_id.includes(".")
-      ? args.bead_id.split(".")[0]
-      : args.bead_id;
-
-    // Send completion message using embedded swarm-mail
-    const completionBody = [
-      `## Subtask Complete: ${args.bead_id}`,
-      "",
-      `**Summary**: ${args.summary}`,
-      "",
-      parsedEvaluation
-        ? `**Self-Evaluation**: ${parsedEvaluation.passed ? "PASSED" : "FAILED"}`
-        : "",
-      parsedEvaluation?.overall_feedback
-        ? `**Feedback**: ${parsedEvaluation.overall_feedback}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    await sendSwarmMessage({
-      projectPath: args.project_key,
-      fromAgent: args.agent_name,
-      toAgents: [], // Thread broadcast
-      subject: `Complete: ${args.bead_id}`,
-      body: completionBody,
-      threadId: epicId,
-      importance: "normal",
-    });
-
-    // Build success response with semantic-memory integration
-    const response = {
-      success: true,
-      bead_id: args.bead_id,
-      closed: true,
-      reservations_released: true,
-      message_sent: true,
-      agent_registration: {
-        verified: agentRegistered,
-        warning: registrationWarning || undefined,
-      },
-      verification_gate: verificationResult
-        ? {
-            passed: true,
-            summary: verificationResult.summary,
-            steps: verificationResult.steps.map((s) => ({
-              name: s.name,
-              passed: s.passed,
-              skipped: s.skipped,
-              skipReason: s.skipReason,
-            })),
-          }
-        : args.skip_verification
-          ? { skipped: true, reason: "skip_verification=true" }
-          : { skipped: true, reason: "no files_touched provided" },
-      ubs_scan: ubsResult
-        ? {
-            ran: true,
-            bugs_found: ubsResult.summary.total,
-            summary: ubsResult.summary,
-            warnings: ubsResult.bugs.filter((b) => b.severity !== "critical"),
-          }
-        : verificationResult
-          ? { ran: true, included_in_verification_gate: true }
-          : {
-              ran: false,
-              reason: args.skip_ubs_scan
-                ? "skipped"
-                : "no files or ubs unavailable",
-            },
-      learning_prompt: `## Reflection
+            }
+          : args.skip_verification
+            ? { skipped: true, reason: "skip_verification=true" }
+            : { skipped: true, reason: "no files_touched provided" },
+        ubs_scan: ubsResult
+          ? {
+              ran: true,
+              bugs_found: ubsResult.summary.total,
+              summary: ubsResult.summary,
+              warnings: ubsResult.bugs.filter((b) => b.severity !== "critical"),
+            }
+          : verificationResult
+            ? { ran: true, included_in_verification_gate: true }
+            : {
+                ran: false,
+                reason: args.skip_ubs_scan
+                  ? "skipped"
+                  : "no files or ubs unavailable",
+              },
+        learning_prompt: `## Reflection
 
 Did you learn anything reusable during this subtask? Consider:
 
@@ -1339,15 +1397,110 @@ Did you learn anything reusable during this subtask? Consider:
 If you discovered something valuable, use \`swarm_learn\` or \`skills_create\` to preserve it as a skill for future swarms.
 
 Files touched: ${args.files_touched?.join(", ") || "none recorded"}`,
-      // Add semantic-memory integration on success
-      memory_store: formatMemoryStoreOnSuccess(
-        args.bead_id,
-        args.summary,
-        args.files_touched || [],
-      ),
-    };
+        // Automatic memory capture (MANDATORY)
+        memory_capture: {
+          attempted: true,
+          stored: memoryStored,
+          error: memoryError,
+          information: memoryInfo.information,
+          metadata: memoryInfo.metadata,
+          note: memoryStored
+            ? "Learning automatically stored in semantic-memory"
+            : `Failed to store: ${memoryError}. Learning lost unless semantic-memory is available.`,
+        },
+      };
 
-    return JSON.stringify(response, null, 2);
+      return JSON.stringify(response, null, 2);
+    } catch (error) {
+      // CRITICAL: Notify coordinator of failure via swarm mail
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      // Determine which step failed
+      let failedStep = "unknown";
+      if (errorMessage.includes("verification")) {
+        failedStep = "Verification Gate (UBS/typecheck/tests)";
+      } else if (errorMessage.includes("UBS") || errorMessage.includes("ubs")) {
+        failedStep = "UBS scan";
+      } else if (errorMessage.includes("evaluation")) {
+        failedStep = "Self-evaluation parsing";
+      } else if (
+        errorMessage.includes("bead") ||
+        errorMessage.includes("close")
+      ) {
+        failedStep = "Bead close";
+      } else if (
+        errorMessage.includes("memory") ||
+        errorMessage.includes("semantic")
+      ) {
+        failedStep = "Memory storage (non-fatal)";
+      } else if (
+        errorMessage.includes("reservation") ||
+        errorMessage.includes("release")
+      ) {
+        failedStep = "File reservation release";
+      } else if (
+        errorMessage.includes("message") ||
+        errorMessage.includes("mail")
+      ) {
+        failedStep = "Swarm mail notification";
+      }
+
+      // Build error notification body
+      const errorBody = [
+        `## ⚠️ SWARM_COMPLETE FAILED`,
+        "",
+        `**Bead**: ${args.bead_id}`,
+        `**Agent**: ${args.agent_name}`,
+        `**Failed Step**: ${failedStep}`,
+        "",
+        `### Error Message`,
+        "```",
+        errorMessage,
+        "```",
+        "",
+        errorStack
+          ? `### Stack Trace\n\`\`\`\n${errorStack.slice(0, 1000)}\n\`\`\`\n`
+          : "",
+        `### Context`,
+        `- **Summary**: ${args.summary}`,
+        `- **Files touched**: ${args.files_touched?.length ? args.files_touched.join(", ") : "none"}`,
+        `- **Skip UBS**: ${args.skip_ubs_scan ?? false}`,
+        `- **Skip verification**: ${args.skip_verification ?? false}`,
+        "",
+        `### Recovery Actions`,
+        "1. Check error message for specific issue",
+        "2. Review failed step (UBS scan, typecheck, bead close, etc.)",
+        "3. Fix underlying issue or use skip flags if appropriate",
+        "4. Retry swarm_complete after fixing",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      // Send urgent notification to coordinator
+      try {
+        await sendSwarmMessage({
+          projectPath: args.project_key,
+          fromAgent: args.agent_name,
+          toAgents: [], // Thread broadcast to coordinator
+          subject: `FAILED: swarm_complete for ${args.bead_id}`,
+          body: errorBody,
+          threadId: epicId,
+          importance: "urgent",
+        });
+      } catch (mailError) {
+        // Even swarm mail failed - log to console as last resort
+        console.error(
+          `[swarm_complete] CRITICAL: Failed to notify coordinator of failure for ${args.bead_id}:`,
+          mailError,
+        );
+        console.error(`[swarm_complete] Original error:`, error);
+      }
+
+      // Re-throw the original error after notifying
+      throw error;
+    }
   },
 });
 

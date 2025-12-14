@@ -9,5 +9,11 @@ export default defineConfig({
     sequence: {
       concurrent: false,
     },
+    env: {
+      // Enable test-specific collections to isolate test data from production
+      TEST_MEMORY_COLLECTIONS: "true",
+    },
+    // Global setup/teardown hooks
+    globalSetup: "./vitest.integration.setup.ts",
   },
 });

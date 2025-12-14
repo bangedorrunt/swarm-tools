@@ -193,13 +193,20 @@ This feeds back into the decomposition strategy:
 
 **Confidence decay:** Patterns fade over 90 days unless revalidated. Prevents stale knowledge from dominating.
 
-### It Coordinates Agents
+### Swarm Mail: Actor-Model Coordination
 
-Workers don't just run in parallel - they can communicate:
+Workers don't just run in parallel - they coordinate via **Swarm Mail**, an event-sourced actor model built on local-first primitives.
+
+**What makes Swarm Mail different from traditional agent messaging:**
+
+- **Actor model over durable streams** - DurableMailbox, DurableLock, DurableDeferred (inspired by Electric SQL patterns)
+- **Local-first with PGlite** - embedded Postgres, no external servers, survives across sessions
+- **Event-sourced coordination** - append-only log, materialized views, full audit trail
+- **Context-safe by design** - hard caps on inbox (max 5 messages), thread summarization, body-on-demand
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      AGENT MAIL                              │
+│                      SWARM MAIL                              │
 │                                                              │
 │  Worker A: "I need the SessionUser type"                    │
 │            ↓                                                 │
@@ -217,7 +224,7 @@ Workers don't just run in parallel - they can communicate:
 
 **File reservations** prevent conflicts:
 
-- Worker A reserves `src/auth/oauth.ts` (exclusive)
+- Worker A reserves `src/auth/oauth.ts` (exclusive via DurableLock)
 - Worker B tries to reserve it → blocked
 - Worker B waits or works on something else
 
@@ -227,7 +234,9 @@ Workers don't just run in parallel - they can communicate:
 - Read individual message bodies on demand
 - Thread summarization for long conversations
 
-All backed by event sourcing - full audit trail of who did what when.
+All coordination state survives context compaction and session restarts.
+
+> **Architecture deep-dive:** See [Swarm Mail Architecture](docs/swarm-mail-architecture.md) for implementation details, actor patterns, and event schemas.
 
 ### It Has Skills
 
@@ -304,8 +313,8 @@ Everything runs in-process. No external servers.
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  SWARM MAIL            agent coordination, file reservations    │
-│                        (DurableMailbox, DurableLock)            │
+│  SWARM MAIL            actor-model coordination (local-first)   │
+│                        (DurableMailbox, DurableLock, PGlite)    │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -421,12 +430,12 @@ bun run build
 
 ## Credits
 
-Built on ideas from:
+**Inspiration & Core Ideas:**
 
-- [MCP Agent Mail](https://github.com/Dicklesworthstone/mcp_agent_mail) - multi-agent coordination patterns
+- [MCP Agent Mail](https://github.com/Dicklesworthstone/mcp_agent_mail) - **THE INSPIRATION** for multi-agent coordination. Swarm Mail is our implementation built on actor-model primitives (DurableMailbox, DurableLock) with local-first PGlite and event sourcing.
 - [Superpowers](https://github.com/obra/superpowers) - verification patterns, Socratic planning, skill architecture
-- [Electric SQL](https://electric-sql.com) - durable streams and event sourcing
-- [Evalite](https://evalite.dev) - outcome-based evaluation framework
+- [Electric SQL](https://electric-sql.com) - durable streams and event sourcing patterns that power Swarm Mail
+- [Evalite](https://evalite.dev) - outcome-based evaluation framework for learning systems
 
 ## License
 

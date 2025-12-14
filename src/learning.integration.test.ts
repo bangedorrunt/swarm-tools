@@ -7,7 +7,7 @@
  * These tests don't require external services - they test the learning
  * algorithms and their integration with swarm tools.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // Learning module
 import {
@@ -1150,6 +1150,10 @@ describe("Storage Module", () => {
       storage = new InMemoryStorage();
     });
 
+    afterEach(async () => {
+      await storage.close();
+    });
+
     it("stores and retrieves feedback", async () => {
       const event = createFeedbackEvent("type_safe", "helpful");
       await storage.storeFeedback(event);
@@ -1305,13 +1309,20 @@ describe("Storage Module", () => {
     beforeEach(async () => {
       isAvailable = await isSemanticMemoryAvailable();
       if (isAvailable) {
+        // Use unique collections per test run to ensure isolation
         storage = new SemanticMemoryStorage({
           collections: {
-            feedback: "test-feedback",
-            patterns: "test-patterns",
-            maturity: "test-maturity",
+            feedback: `test-feedback-learning-${Date.now()}`,
+            patterns: `test-patterns-learning-${Date.now()}`,
+            maturity: `test-maturity-learning-${Date.now()}`,
           },
         });
+      }
+    });
+
+    afterEach(async () => {
+      if (storage) {
+        await storage.close();
       }
     });
 
@@ -1377,6 +1388,10 @@ describe("Storage Module", () => {
 
   describe("Global Storage Management", () => {
     beforeEach(async () => {
+      await resetStorage();
+    });
+
+    afterEach(async () => {
       await resetStorage();
     });
 

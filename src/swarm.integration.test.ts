@@ -1356,4 +1356,128 @@ describe("Swarm Prompt V2 (with Swarm Mail/Beads)", () => {
       expect(SUBTASK_PROMPT_V2).toContain("CRITICAL");
     });
   });
+
+  describe("swarm_complete automatic memory capture", () => {
+    let beadsAvailable = false;
+
+    beforeAll(async () => {
+      beadsAvailable = await isBeadsAvailable();
+    });
+
+    it.skipIf(!beadsAvailable)(
+      "includes memory_capture object in response",
+      async () => {
+        // Create a real bead for the test
+        const createResult =
+          await Bun.$`bd create "Test memory capture" -t task --json`
+            .quiet()
+            .nothrow();
+
+        if (createResult.exitCode !== 0) {
+          console.warn(
+            "Could not create bead:",
+            createResult.stderr.toString(),
+          );
+          return;
+        }
+
+        const bead = JSON.parse(createResult.stdout.toString());
+
+        try {
+          const result = await swarm_complete.execute(
+            {
+              project_key: "/tmp/test-memory-capture",
+              agent_name: "test-agent",
+              bead_id: bead.id,
+              summary: "Implemented auto-capture feature",
+              files_touched: ["src/swarm-orchestrate.ts"],
+              skip_verification: true,
+            },
+            mockContext,
+          );
+
+          const parsed = JSON.parse(result);
+
+          // Verify memory capture was attempted
+          expect(parsed).toHaveProperty("memory_capture");
+          expect(parsed.memory_capture).toHaveProperty("attempted", true);
+          expect(parsed.memory_capture).toHaveProperty("stored");
+          expect(parsed.memory_capture).toHaveProperty("information");
+          expect(parsed.memory_capture).toHaveProperty("metadata");
+
+          // Information should contain bead ID and summary
+          expect(parsed.memory_capture.information).toContain(bead.id);
+          expect(parsed.memory_capture.information).toContain(
+            "Implemented auto-capture feature",
+          );
+
+          // Metadata should contain relevant tags
+          expect(parsed.memory_capture.metadata).toContain("swarm");
+          expect(parsed.memory_capture.metadata).toContain("success");
+        } catch (error) {
+          // Clean up bead if test fails
+          await Bun.$`bd close ${bead.id} --reason "Test cleanup"`
+            .quiet()
+            .nothrow();
+          throw error;
+        }
+      },
+    );
+
+    it.skipIf(!beadsAvailable)(
+      "attempts to store in semantic-memory when available",
+      async () => {
+        const createResult =
+          await Bun.$`bd create "Test semantic-memory storage" -t task --json`
+            .quiet()
+            .nothrow();
+
+        if (createResult.exitCode !== 0) {
+          console.warn(
+            "Could not create bead:",
+            createResult.stderr.toString(),
+          );
+          return;
+        }
+
+        const bead = JSON.parse(createResult.stdout.toString());
+
+        try {
+          const result = await swarm_complete.execute(
+            {
+              project_key: "/tmp/test-memory-storage",
+              agent_name: "test-agent",
+              bead_id: bead.id,
+              summary: "Fixed critical bug in auth flow",
+              files_touched: ["src/auth.ts", "src/middleware.ts"],
+              skip_verification: true,
+            },
+            mockContext,
+          );
+
+          const parsed = JSON.parse(result);
+
+          // If semantic-memory is available, stored should be true
+          // If not, error should explain why
+          if (parsed.memory_capture.stored) {
+            expect(parsed.memory_capture.note).toContain(
+              "automatically stored in semantic-memory",
+            );
+          } else {
+            expect(parsed.memory_capture.error).toBeDefined();
+            expect(
+              parsed.memory_capture.error.includes("not available") ||
+                parsed.memory_capture.error.includes("failed"),
+            ).toBe(true);
+          }
+        } catch (error) {
+          // Clean up bead if test fails
+          await Bun.$`bd close ${bead.id} --reason "Test cleanup"`
+            .quiet()
+            .nothrow();
+          throw error;
+        }
+      },
+    );
+  });
 });
