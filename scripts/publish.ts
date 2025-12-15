@@ -2,8 +2,9 @@
 /**
  * Custom publish script that resolves workspace:* protocols before npm publish
  * 
- * 1. Uses bun pm pack to create tarball (resolves workspace:*)
- * 2. Uses npm publish on the tarball (supports OIDC trusted publishers)
+ * 1. Runs bun install to update lockfile with current package.json versions
+ * 2. Uses bun pm pack to create tarball (resolves workspace:*)
+ * 3. Uses npm publish on the tarball (supports OIDC trusted publishers)
  */
 
 import { $ } from "bun";
@@ -37,6 +38,12 @@ async function findTarball(pkgPath: string): Promise<string> {
 
 async function main() {
   console.log("🦋 Checking packages for publishing...\n");
+
+  // CRITICAL: Update lockfile to ensure workspace:* resolves to current versions
+  // Without this, bun pack uses stale versions from the lockfile
+  console.log("📋 Updating lockfile to ensure workspace versions are current...");
+  await $`bun install`.quiet();
+  console.log("✅ Lockfile updated\n");
 
   for (const pkgPath of packages) {
     const { name, version } = await getLocalVersion(pkgPath);
