@@ -13,31 +13,12 @@ const tabIcons: Record<string, React.ReactNode> = {
   '/docs/research': <FlaskConical className="size-4" />,
 };
 
-/**
- * Sidebar banner with bee ASCII art
- */
-function SidebarBanner() {
-  return (
-    <div className="mb-4 rounded-lg border border-fd-border bg-fd-card p-3 text-center">
-      <pre className="ascii-art text-xs leading-tight">
-        {`    ⬡ ⬡ ⬡
-   ⬡ 🐝 ⬡
-    ⬡ ⬡ ⬡`}
-      </pre>
-      <p className="mt-2 text-xs text-fd-muted-foreground">
-        Multi-agent primitives
-      </p>
-    </div>
-  );
-}
-
 export default function Layout({ children }: { children: ReactNode }) {
   return (
     <DocsLayout
       tree={source.pageTree}
       {...baseOptions()}
       sidebar={{
-        banner: <SidebarBanner />,
         tabs: {
           transform: (option) => ({
             ...option,
