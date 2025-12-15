@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+.turbo/
 
 # Bun
 bun.lockb
@@ -28,4 +29,11 @@ coverage/
 # Logs
 *.log
 npm-debug.log*
+
+# OpenCode runtime artifacts
 .opencode/streams/
+.opencode/*.js
+.opencode/*.wasm
+.opencode/*.data
+.opencode/node_modules/
+.opencode/bun.lock
