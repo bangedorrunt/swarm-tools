@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PGlite } from "@electric-sql/pglite";
-import { runMigrations } from "../streams/migrations.js";
+import { getDatabase } from "../streams/index.js";
 import { beadsMigration } from "./migrations.js";
 import type { DatabaseAdapter } from "../types/database.js";
 import { appendBeadEvent, readBeadEvents, replayBeadEvents } from "./store.js";
@@ -52,11 +52,32 @@ describe("Bead Event Store", () => {
   const projectKey = "/test/project";
 
   beforeEach(async () => {
-    pglite = new PGlite();
+    // Create isolated in-memory instance for tests to avoid singleton conflicts
+    // getDatabase() uses a singleton that persists across tests and causes "PGlite is closed" errors
+    pglite = new PGlite(); // In-memory, isolated instance
+    
+    // Initialize the core events table (same as getDatabase() does via initializeSchema())
+    // This is the base schema needed before beads migration
+    await pglite.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id SERIAL PRIMARY KEY,
+        type TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        timestamp BIGINT NOT NULL,
+        sequence SERIAL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_project_key ON events(project_key);
+      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at BIGINT NOT NULL,
+        description TEXT
+      );
+    `);
+    
     db = wrapPGlite(pglite);
-
-    // Run base migrations (v1-v5)
-    await runMigrations(pglite);
 
     // Run beads migration (v6)
     await pglite.exec("BEGIN");

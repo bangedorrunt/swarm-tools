@@ -59,6 +59,9 @@ export type {
   BeadCompactedEvent,
 } from "./events.js";
 
+// Adapter factory
+export { createBeadsAdapter } from "./adapter.js";
+
 // Migrations
 export { beadsMigration, beadsMigrations } from "./migrations.js";
 
