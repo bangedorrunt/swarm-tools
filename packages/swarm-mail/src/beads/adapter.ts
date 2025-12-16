@@ -91,6 +91,19 @@ export function createBeadsAdapter(
 
       await appendBeadEvent(event, projectPath, db);
 
+      // If assignee provided, emit bead_assigned event
+      if (options.assignee) {
+        const assignEvent: BeadEvent = {
+          type: "bead_assigned",
+          project_key: projectKeyParam,
+          bead_id: event.bead_id,
+          timestamp: Date.now(),
+          assignee: options.assignee,
+          assigned_by: options.created_by || null,
+        } as any;
+        await appendBeadEvent(assignEvent, projectPath, db);
+      }
+
       // Return the created bead from projection
       const bead = await getBead(db, projectKeyParam, event.bead_id);
       if (!bead) {

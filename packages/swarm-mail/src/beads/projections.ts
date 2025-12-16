@@ -104,6 +104,12 @@ export async function updateProjections(
     case "bead_epic_child_removed":
       await handleEpicChildRemoved(db, event);
       break;
+    case "bead_assigned":
+      await handleBeadAssigned(db, event);
+      break;
+    case "bead_work_started":
+      await handleWorkStarted(db, event);
+      break;
     default:
       console.warn(`[beads/projections] Unknown event type: ${event.type}`);
   }
@@ -129,7 +135,7 @@ async function handleBeadCreated(db: DatabaseAdapter, event: BeadEvent): Promise
       "open",
       event.title,
       event.description || null,
-      event.priority || 2,
+      event.priority ?? 2,
       event.parent_id || null,
       null, // assignee (set later via bead_assigned)
       event.timestamp,
@@ -156,6 +162,10 @@ async function handleBeadUpdated(db: DatabaseAdapter, event: BeadEvent): Promise
   if (changes.priority) {
     updates.push(`priority = $${paramIndex++}`);
     params.push(changes.priority.new);
+  }
+  if (changes.assignee) {
+    updates.push(`assignee = $${paramIndex++}`);
+    params.push(changes.assignee.new);
   }
 
   if (updates.length > 0) {
@@ -289,6 +299,20 @@ async function handleEpicChildRemoved(db: DatabaseAdapter, event: BeadEvent): Pr
   await db.query(
     `UPDATE beads SET parent_id = NULL, updated_at = $1 WHERE id = $2`,
     [event.timestamp, event.child_id],
+  );
+}
+
+async function handleBeadAssigned(db: DatabaseAdapter, event: BeadEvent): Promise<void> {
+  await db.query(
+    `UPDATE beads SET assignee = $1, updated_at = $2 WHERE id = $3`,
+    [event.assignee, event.timestamp, event.bead_id],
+  );
+}
+
+async function handleWorkStarted(db: DatabaseAdapter, event: BeadEvent): Promise<void> {
+  await db.query(
+    `UPDATE beads SET status = 'in_progress', updated_at = $1 WHERE id = $2`,
+    [event.timestamp, event.bead_id],
   );
 }
 
