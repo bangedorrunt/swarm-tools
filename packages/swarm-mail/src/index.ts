@@ -70,10 +70,10 @@ export type { SocketAdapterOptions } from "./socket-adapter";
 export * from "./streams";
 
 // ============================================================================
-// Beads Module Exports
+// Hive Module Exports (work item tracking)
 // ============================================================================
 
-export * from "./beads";
+export * from "./hive";
 
 // ============================================================================
 // Daemon Lifecycle Management
