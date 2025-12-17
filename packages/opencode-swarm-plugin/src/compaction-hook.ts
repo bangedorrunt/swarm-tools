@@ -107,25 +107,25 @@ Extract from session context:
  * 
  * Uses the adapter directly to query beads.
  */
-import { getBeadsAdapter, getBeadsWorkingDirectory } from "./beads";
+import { getHiveAdapter, getHiveWorkingDirectory } from "./hive";
 
 async function hasSwarmSign(): Promise<boolean> {
   try {
-    const projectKey = getBeadsWorkingDirectory();
-    const adapter = await getBeadsAdapter(projectKey);
-    const beads = await adapter.queryBeads(projectKey, {});
+    const projectKey = getHiveWorkingDirectory();
+    const adapter = await getHiveAdapter(projectKey);
+    const cells = await adapter.queryCells(projectKey, {});
     
-    if (!Array.isArray(beads)) return false;
+    if (!Array.isArray(cells)) return false;
 
     // Look for swarm sign:
-    // 1. Any in_progress beads
-    // 2. Any open beads with a parent (subtasks)
+    // 1. Any in_progress cells
+    // 2. Any open cells with a parent (subtasks)
     // 3. Any epics that aren't closed
-    return beads.some(
-      (b) =>
-        b.status === "in_progress" ||
-        (b.status === "open" && b.parent_id) ||
-        (b.type === "epic" && b.status !== "closed"),
+    return cells.some(
+      (c) =>
+        c.status === "in_progress" ||
+        (c.status === "open" && c.parent_id) ||
+        (c.type === "epic" && c.status !== "closed"),
     );
   } catch {
     return false;
