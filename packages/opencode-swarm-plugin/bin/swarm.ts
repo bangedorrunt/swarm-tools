@@ -27,6 +27,10 @@ import {
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import {
+  checkBeadsMigrationNeeded,
+  migrateBeadsToHive,
+} from "../src/hive";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -1487,6 +1491,45 @@ async function setup() {
       for (const { dep } of manual) {
         p.log.message("  " + dep.name + ": " + dep.install);
       }
+    }
+  }
+
+  // Check for .beads → .hive migration
+  const cwd = process.cwd();
+  const migrationCheck = checkBeadsMigrationNeeded(cwd);
+  if (migrationCheck.needed) {
+    p.log.step("Legacy .beads directory detected");
+    p.log.message(dim("  Found: " + migrationCheck.beadsPath));
+    
+    const shouldMigrate = await p.confirm({
+      message: "Migrate .beads to .hive? (recommended)",
+      initialValue: true,
+    });
+
+    if (p.isCancel(shouldMigrate)) {
+      p.cancel("Setup cancelled");
+      process.exit(0);
+    }
+
+    if (shouldMigrate) {
+      const migrateSpinner = p.spinner();
+      migrateSpinner.start("Migrating .beads to .hive...");
+      
+      try {
+        const result = await migrateBeadsToHive(cwd);
+        if (result.migrated) {
+          migrateSpinner.stop("Migration complete");
+          p.log.success("Renamed .beads/ → .hive/");
+        } else {
+          migrateSpinner.stop("Migration skipped");
+          p.log.warn(result.reason || "Unknown reason");
+        }
+      } catch (error) {
+        migrateSpinner.stop("Migration failed");
+        p.log.error(error instanceof Error ? error.message : String(error));
+      }
+    } else {
+      p.log.warn("Skipping migration - .beads will continue to work but is deprecated");
     }
   }
 

@@ -1,11 +1,12 @@
 /**
- * Beads Schema Migration (v6)
+ * Beads Schema Migration (v7-v8)
  *
  * Adds beads-specific tables to the shared PGLite database.
  * This migration extends the existing swarm-mail schema.
  *
  * ## Migration Strategy
- * - Migration v6 adds beads tables to existing swarm-mail schema (v1-v5)
+ * - Migration v7 adds beads tables to existing swarm-mail schema (v0-v6)
+ * - Migration v8 adds cells view for beads→hive rename compatibility
  * - Shares same PGLite database instance and migration system
  * - Uses same schema_version table for tracking
  *
@@ -36,7 +37,7 @@ import type { Migration } from "../streams/migrations.js";
  * in src/streams/migrations.ts.
  */
 export const beadsMigration: Migration = {
-  version: 6,
+  version: 7,
   description: "Add beads tables for issue tracking",
   up: `
     -- ========================================================================
@@ -162,7 +163,7 @@ export const beadsMigration: Migration = {
  * The view is updatable via INSTEAD OF triggers for INSERT/UPDATE/DELETE.
  */
 export const cellsViewMigration: Migration = {
-  version: 7,
+  version: 8,
   description: "Add cells view for beads→hive rename compatibility",
   up: `
     -- ========================================================================

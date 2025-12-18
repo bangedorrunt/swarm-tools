@@ -131,6 +131,111 @@ export class HiveValidationError extends Error {
 export const BeadValidationError = HiveValidationError;
 
 // ============================================================================
+// Directory Migration (.beads → .hive)
+// ============================================================================
+
+/**
+ * Result of checking if .beads → .hive migration is needed
+ */
+export interface MigrationCheckResult {
+  /** Whether migration is needed */
+  needed: boolean;
+  /** Path to .beads directory if it exists */
+  beadsPath?: string;
+}
+
+/**
+ * Result of migrating .beads → .hive
+ */
+export interface MigrationResult {
+  /** Whether migration was performed */
+  migrated: boolean;
+  /** Reason if migration was skipped */
+  reason?: string;
+}
+
+/**
+ * Check if .beads → .hive migration is needed
+ * 
+ * Migration is needed when:
+ * - .beads directory exists
+ * - .hive directory does NOT exist
+ * 
+ * @param projectPath - Absolute path to the project root
+ * @returns MigrationCheckResult indicating if migration is needed
+ */
+export function checkBeadsMigrationNeeded(projectPath: string): MigrationCheckResult {
+  const beadsDir = join(projectPath, ".beads");
+  const hiveDir = join(projectPath, ".hive");
+  
+  // If .hive already exists, no migration needed
+  if (existsSync(hiveDir)) {
+    return { needed: false };
+  }
+  
+  // If .beads exists but .hive doesn't, migration is needed
+  if (existsSync(beadsDir)) {
+    return { needed: true, beadsPath: beadsDir };
+  }
+  
+  // Neither exists - no migration needed
+  return { needed: false };
+}
+
+/**
+ * Migrate .beads directory to .hive
+ * 
+ * This function renames .beads to .hive. It should only be called
+ * after user confirmation via CLI prompt.
+ * 
+ * @param projectPath - Absolute path to the project root
+ * @returns MigrationResult indicating success or skip reason
+ */
+export async function migrateBeadsToHive(projectPath: string): Promise<MigrationResult> {
+  const beadsDir = join(projectPath, ".beads");
+  const hiveDir = join(projectPath, ".hive");
+  
+  // Check if .hive already exists - skip migration
+  if (existsSync(hiveDir)) {
+    return { 
+      migrated: false, 
+      reason: ".hive directory already exists - skipping migration to avoid data loss" 
+    };
+  }
+  
+  // Check if .beads exists
+  if (!existsSync(beadsDir)) {
+    return { 
+      migrated: false, 
+      reason: ".beads directory not found - nothing to migrate" 
+    };
+  }
+  
+  // Perform the rename
+  const { renameSync } = await import("node:fs");
+  renameSync(beadsDir, hiveDir);
+  
+  return { migrated: true };
+}
+
+/**
+ * Ensure .hive directory exists
+ * 
+ * Creates .hive directory if it doesn't exist. This is idempotent
+ * and safe to call multiple times.
+ * 
+ * @param projectPath - Absolute path to the project root
+ */
+export function ensureHiveDirectory(projectPath: string): void {
+  const hiveDir = join(projectPath, ".hive");
+  
+  if (!existsSync(hiveDir)) {
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(hiveDir, { recursive: true });
+  }
+}
+
+// ============================================================================
 // Adapter Singleton
 // ============================================================================
 
@@ -714,7 +819,10 @@ export const hive_sync = tool({
       }
     };
 
-    // 1. Flush cells to JSONL using FlushManager
+    // 1. Ensure .hive directory exists before writing
+    ensureHiveDirectory(projectKey);
+
+    // 2. Flush cells to JSONL using FlushManager
     const flushManager = new FlushManager({
       adapter,
       projectKey,
@@ -731,7 +839,7 @@ export const hive_sync = tool({
       return "No cells to sync";
     }
 
-    // 2. Check if there are changes to commit
+    // 3. Check if there are changes to commit
     const hiveStatusResult = await runGitCommand([
       "status",
       "--porcelain",
@@ -740,7 +848,7 @@ export const hive_sync = tool({
     const hasChanges = hiveStatusResult.stdout.trim() !== "";
 
     if (hasChanges) {
-      // 3. Stage .hive changes
+      // 4. Stage .hive changes
       const addResult = await runGitCommand(["add", ".hive/"]);
       if (addResult.exitCode !== 0) {
         throw new HiveError(
@@ -750,7 +858,7 @@ export const hive_sync = tool({
         );
       }
 
-      // 4. Commit
+      // 5. Commit
       const commitResult = await withTimeout(
         runGitCommand(["commit", "-m", "chore: sync hive"]),
         TIMEOUT_MS,
@@ -768,7 +876,7 @@ export const hive_sync = tool({
       }
     }
 
-    // 5. Pull if requested
+    // 6. Pull if requested
     if (autoPull) {
       const pullResult = await withTimeout(
         runGitCommand(["pull", "--rebase"]),
@@ -785,7 +893,7 @@ export const hive_sync = tool({
       }
     }
 
-    // 6. Push
+    // 7. Push
     const pushResult = await withTimeout(
       runGitCommand(["push"]),
       TIMEOUT_MS,

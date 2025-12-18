@@ -20,13 +20,6 @@ import {
   getHiveAdapter,
   setHiveWorkingDirectory,
   // Legacy aliases for backward compatibility tests
-  hive_create,
-  hive_create_epic,
-  hive_query,
-  hive_update,
-  hive_close,
-  hive_start,
-  hive_ready,
   beads_link_thread,
   BeadError,
   getBeadsAdapter,
@@ -689,6 +682,152 @@ describe("beads integration", () => {
         expect(subtaskClosed).toBeDefined();
         expect(subtaskClosed!.status).toBe("closed");
       }
+    });
+  });
+
+  describe("Directory Migration (.beads → .hive)", () => {
+    it("checkBeadsMigrationNeeded detects .beads without .hive", async () => {
+      const { checkBeadsMigrationNeeded } = await import("./hive");
+      const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create temp project with .beads directory only
+      const tempProject = join(tmpdir(), `hive-migration-test-${Date.now()}`);
+      const beadsDir = join(tempProject, ".beads");
+      
+      mkdirSync(beadsDir, { recursive: true });
+      writeFileSync(join(beadsDir, "issues.jsonl"), '{"id":"bd-test","title":"Test"}');
+      
+      const result = checkBeadsMigrationNeeded(tempProject);
+      
+      expect(result.needed).toBe(true);
+      expect(result.beadsPath).toBe(beadsDir);
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
+    });
+
+    it("checkBeadsMigrationNeeded returns false if .hive exists", async () => {
+      const { checkBeadsMigrationNeeded } = await import("./hive");
+      const { mkdirSync, rmSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create temp project with .hive directory
+      const tempProject = join(tmpdir(), `hive-migration-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      
+      mkdirSync(hiveDir, { recursive: true });
+      
+      const result = checkBeadsMigrationNeeded(tempProject);
+      
+      expect(result.needed).toBe(false);
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
+    });
+
+    it("migrateBeadsToHive renames .beads to .hive", async () => {
+      const { migrateBeadsToHive } = await import("./hive");
+      const { mkdirSync, existsSync, rmSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create temp project with .beads directory
+      const tempProject = join(tmpdir(), `hive-migration-test-${Date.now()}`);
+      const beadsDir = join(tempProject, ".beads");
+      const hiveDir = join(tempProject, ".hive");
+      
+      mkdirSync(beadsDir, { recursive: true });
+      writeFileSync(join(beadsDir, "issues.jsonl"), '{"id":"bd-test","title":"Test"}');
+      writeFileSync(join(beadsDir, "config.yaml"), "version: 1");
+      
+      // Run migration (called after user confirms in CLI)
+      const result = await migrateBeadsToHive(tempProject);
+      
+      // Verify .beads renamed to .hive
+      expect(result.migrated).toBe(true);
+      expect(existsSync(hiveDir)).toBe(true);
+      expect(existsSync(beadsDir)).toBe(false);
+      expect(existsSync(join(hiveDir, "issues.jsonl"))).toBe(true);
+      expect(existsSync(join(hiveDir, "config.yaml"))).toBe(true);
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
+    });
+
+    it("migrateBeadsToHive skips if .hive already exists", async () => {
+      const { migrateBeadsToHive } = await import("./hive");
+      const { mkdirSync, existsSync, rmSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create temp project with BOTH .beads and .hive
+      const tempProject = join(tmpdir(), `hive-migration-test-${Date.now()}`);
+      const beadsDir = join(tempProject, ".beads");
+      const hiveDir = join(tempProject, ".hive");
+      
+      mkdirSync(beadsDir, { recursive: true });
+      mkdirSync(hiveDir, { recursive: true });
+      writeFileSync(join(beadsDir, "issues.jsonl"), '{"id":"bd-old"}');
+      writeFileSync(join(hiveDir, "issues.jsonl"), '{"id":"bd-new"}');
+      
+      // Run migration - should skip
+      const result = await migrateBeadsToHive(tempProject);
+      
+      // Verify both still exist (no migration)
+      expect(result.migrated).toBe(false);
+      expect(result.reason).toContain("already exists");
+      expect(existsSync(beadsDir)).toBe(true);
+      expect(existsSync(hiveDir)).toBe(true);
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
+    });
+
+    it("ensureHiveDirectory creates .hive if missing", async () => {
+      const { ensureHiveDirectory } = await import("./hive");
+      const { mkdirSync, existsSync, rmSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create empty temp project
+      const tempProject = join(tmpdir(), `hive-ensure-test-${Date.now()}`);
+      mkdirSync(tempProject, { recursive: true });
+      
+      const hiveDir = join(tempProject, ".hive");
+      expect(existsSync(hiveDir)).toBe(false);
+      
+      // Ensure creates it
+      ensureHiveDirectory(tempProject);
+      
+      expect(existsSync(hiveDir)).toBe(true);
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
+    });
+
+    it("ensureHiveDirectory is idempotent", async () => {
+      const { ensureHiveDirectory } = await import("./hive");
+      const { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      
+      // Create temp project with existing .hive
+      const tempProject = join(tmpdir(), `hive-ensure-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+      writeFileSync(join(hiveDir, "issues.jsonl"), '{"id":"existing"}');
+      
+      // Ensure doesn't overwrite
+      ensureHiveDirectory(tempProject);
+      
+      expect(existsSync(hiveDir)).toBe(true);
+      expect(readFileSync(join(hiveDir, "issues.jsonl"), "utf-8")).toBe('{"id":"existing"}');
+      
+      // Cleanup
+      rmSync(tempProject, { recursive: true, force: true });
     });
   });
 });
