@@ -32,6 +32,8 @@ import {
   migrateBeadsToHive,
   mergeHistoricBeads,
   importJsonlToPGLite,
+  ensureHiveDirectory,
+  getHiveAdapter,
 } from "../src/hive";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -70,6 +72,68 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
 
 const PACKAGE_NAME = "opencode-swarm-plugin";
+
+// ============================================================================
+// File Operation Helpers
+// ============================================================================
+
+type FileStatus = "created" | "updated" | "unchanged";
+
+interface FileStats {
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+
+/**
+ * Write a file with status logging (created/updated/unchanged)
+ * @param path - File path to write
+ * @param content - Content to write
+ * @param label - Label for logging (e.g., "Plugin", "Command")
+ * @returns Status of the operation
+ */
+function writeFileWithStatus(path: string, content: string, label: string): FileStatus {
+  const exists = existsSync(path);
+  
+  if (exists) {
+    const current = readFileSync(path, "utf-8");
+    if (current === content) {
+      p.log.message(dim(`  ${label}: ${path} (unchanged)`));
+      return "unchanged";
+    }
+  }
+  
+  writeFileSync(path, content);
+  const status: FileStatus = exists ? "updated" : "created";
+  p.log.success(`${label}: ${path} (${status})`);
+  return status;
+}
+
+/**
+ * Create a directory with logging
+ * @param path - Directory path to create
+ * @returns true if created, false if already exists
+ */
+function mkdirWithStatus(path: string): boolean {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true });
+    p.log.message(dim(`  Created directory: ${path}`));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Remove a file with logging
+ * @param path - File path to remove
+ * @param label - Label for logging
+ */
+function rmWithStatus(path: string, label: string): void {
+  if (existsSync(path)) {
+    rmSync(path);
+    p.log.message(dim(`  Removed ${label}: ${path}`));
+  }
+}
 
 // ============================================================================
 // Seasonal Messages (inspired by Astro's Houston)
@@ -1707,39 +1771,29 @@ async function setup() {
 
   p.log.step("Setting up OpenCode integration...");
 
+  // Track file operation statistics
+  const stats: FileStats = { created: 0, updated: 0, unchanged: 0 };
+
   // Create directories if needed
   const skillsDir = join(configDir, "skills");
   for (const dir of [pluginDir, commandDir, agentDir, swarmAgentDir, skillsDir]) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    mkdirWithStatus(dir);
   }
 
-  writeFileSync(pluginPath, getPluginWrapper());
-  p.log.success("Plugin: " + pluginPath);
-
-  writeFileSync(commandPath, SWARM_COMMAND);
-  p.log.success("Command: " + commandPath);
+  // Write plugin and command files
+  stats[writeFileWithStatus(pluginPath, getPluginWrapper(), "Plugin")]++;
+  stats[writeFileWithStatus(commandPath, SWARM_COMMAND, "Command")]++;
 
   // Write nested agent files (swarm/planner.md, swarm/worker.md)
   // This is the format used by Task(subagent_type="swarm/worker")
-  writeFileSync(plannerAgentPath, getPlannerAgent(coordinatorModel as string));
-  p.log.success("Planner agent: " + plannerAgentPath);
-
-  writeFileSync(workerAgentPath, getWorkerAgent(workerModel as string));
-  p.log.success("Worker agent: " + workerAgentPath);
+  stats[writeFileWithStatus(plannerAgentPath, getPlannerAgent(coordinatorModel as string), "Planner agent")]++;
+  stats[writeFileWithStatus(workerAgentPath, getWorkerAgent(workerModel as string), "Worker agent")]++;
 
   // Clean up legacy flat agent files if they exist
-  if (existsSync(legacyPlannerPath)) {
-    rmSync(legacyPlannerPath);
-    p.log.message(dim("  Removed legacy: " + legacyPlannerPath));
-  }
-  if (existsSync(legacyWorkerPath)) {
-    rmSync(legacyWorkerPath);
-    p.log.message(dim("  Removed legacy: " + legacyWorkerPath));
-  }
+  rmWithStatus(legacyPlannerPath, "legacy planner");
+  rmWithStatus(legacyWorkerPath, "legacy worker");
 
-  p.log.success("Skills directory: " + skillsDir);
+  p.log.message(dim(`  Skills directory: ${skillsDir}`));
 
   // Show bundled skills info (and optionally sync to global skills dir)
   const bundledSkillsPath = join(__dirname, "..", "global-skills");
@@ -1850,16 +1904,28 @@ async function setup() {
     }
   }
 
+  // Show setup summary
+  const totalFiles = stats.created + stats.updated + stats.unchanged;
+  const summaryParts: string[] = [];
+  if (stats.created > 0) summaryParts.push(`${stats.created} created`);
+  if (stats.updated > 0) summaryParts.push(`${stats.updated} updated`);
+  if (stats.unchanged > 0) summaryParts.push(`${stats.unchanged} unchanged`);
+  
+  p.log.message("");
+  p.log.success(`Setup complete: ${totalFiles} files (${summaryParts.join(", ")})`);
+
   p.note(
-    'cd your-project\nbd init\nopencode\n/swarm "your task"\n\nSkills: Use skills_list to see available skills',
+    'cd your-project\nswarm init\nopencode\n/swarm "your task"\n\nSkills: Use skills_list to see available skills',
     "Next steps",
   );
 
-  p.outro("Setup complete! Run 'swarm doctor' to verify.");
+  p.outro("Run 'swarm doctor' to verify installation.");
 }
 
 async function init() {
   p.intro("swarm init v" + VERSION);
+
+  const projectPath = process.cwd();
 
   const gitDir = existsSync(".git");
   if (!gitDir) {
@@ -1869,12 +1935,15 @@ async function init() {
     process.exit(1);
   }
 
+  // Check for existing .hive or .beads directories
+  const hiveDir = existsSync(".hive");
   const beadsDir = existsSync(".beads");
-  if (beadsDir) {
-    p.log.warn("Beads already initialized in this project");
+  
+  if (hiveDir) {
+    p.log.warn("Hive already initialized in this project (.hive/ exists)");
 
     const reinit = await p.confirm({
-      message: "Re-initialize beads?",
+      message: "Continue anyway?",
       initialValue: false,
     });
 
@@ -1882,25 +1951,54 @@ async function init() {
       p.outro("Aborted");
       process.exit(0);
     }
-  }
-
-  const s = p.spinner();
-  s.start("Initializing beads...");
-
-  const success = await runInstall("bd init");
-
-  if (success) {
-    s.stop("Beads initialized");
-    p.log.success("Created .beads/ directory");
-
-    const createBead = await p.confirm({
-      message: "Create your first bead?",
+  } else if (beadsDir) {
+    // Offer migration from .beads to .hive
+    p.log.warn("Found legacy .beads/ directory");
+    
+    const migrate = await p.confirm({
+      message: "Migrate .beads/ to .hive/?",
       initialValue: true,
     });
 
-    if (!p.isCancel(createBead) && createBead) {
+    if (!p.isCancel(migrate) && migrate) {
+      const s = p.spinner();
+      s.start("Migrating .beads/ to .hive/...");
+      
+      const result = await migrateBeadsToHive(projectPath);
+      
+      if (result.migrated) {
+        s.stop("Migration complete");
+        p.log.success("Renamed .beads/ to .hive/");
+        
+        // Merge historic beads if beads.base.jsonl exists
+        const mergeResult = await mergeHistoricBeads(projectPath);
+        if (mergeResult.merged > 0) {
+          p.log.success(`Merged ${mergeResult.merged} historic cells`);
+        }
+      } else {
+        s.stop("Migration skipped: " + result.reason);
+      }
+    }
+  }
+
+  const s = p.spinner();
+  s.start("Initializing hive...");
+
+  try {
+    // Create .hive directory using our function (no bd CLI needed)
+    ensureHiveDirectory(projectPath);
+    
+    s.stop("Hive initialized");
+    p.log.success("Created .hive/ directory");
+
+    const createCell = await p.confirm({
+      message: "Create your first cell?",
+      initialValue: true,
+    });
+
+    if (!p.isCancel(createCell) && createCell) {
       const title = await p.text({
-        message: "Bead title:",
+        message: "Cell title:",
         placeholder: "Implement user authentication",
         validate: (v) => (v.length === 0 ? "Title required" : undefined),
       });
@@ -1917,17 +2015,22 @@ async function init() {
         });
 
         if (!p.isCancel(typeResult)) {
-          const beadSpinner = p.spinner();
-          beadSpinner.start("Creating bead...");
+          const cellSpinner = p.spinner();
+          cellSpinner.start("Creating cell...");
 
-          const createSuccess = await runInstall(
-            'bd create --title "' + title + '" --type ' + typeResult,
-          );
-
-          if (createSuccess) {
-            beadSpinner.stop("Bead created");
-          } else {
-            beadSpinner.stop("Failed to create bead");
+          try {
+            // Use HiveAdapter to create the cell (no bd CLI needed)
+            const adapter = await getHiveAdapter(projectPath);
+            const cell = await adapter.createCell(projectPath, {
+              title: title as string,
+              type: typeResult as "feature" | "bug" | "task" | "chore",
+              priority: 2,
+            });
+            
+            cellSpinner.stop("Cell created: " + cell.id);
+          } catch (error) {
+            cellSpinner.stop("Failed to create cell");
+            p.log.error(error instanceof Error ? error.message : String(error));
           }
         }
       }
@@ -1953,9 +2056,9 @@ async function init() {
     }
 
     p.outro("Project initialized! Use '/swarm' in OpenCode to get started.");
-  } else {
-    s.stop("Failed to initialize beads");
-    p.log.error("Make sure 'bd' is installed: swarm doctor");
+  } catch (error) {
+    s.stop("Failed to initialize hive");
+    p.log.error(error instanceof Error ? error.message : String(error));
     p.outro("Aborted");
     process.exit(1);
   }

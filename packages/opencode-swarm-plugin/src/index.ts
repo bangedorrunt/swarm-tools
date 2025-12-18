@@ -249,11 +249,9 @@ export const SwarmPlugin: Plugin = async (
         await releaseReservations();
       }
 
-      // Auto-sync hive after closing (supports both hive_close and legacy hive_close)
-      if (toolName === "hive_close" || toolName === "hive_close") {
-        // Trigger async sync without blocking - fire and forget
-        void $`bd sync`.quiet().nothrow();
-      }
+      // Note: hive_sync should be called explicitly at session end
+      // Auto-sync was removed because bd CLI is deprecated
+      // The hive_sync tool handles flushing to JSONL and git commit/push
     },
   };
 };
