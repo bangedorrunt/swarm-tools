@@ -36,7 +36,27 @@ import {
 	Ollama,
 	type Memory,
 	type SearchResult,
+	legacyDatabaseExists,
+	migrateLegacyMemories,
 } from "swarm-mail";
+
+// ============================================================================
+// Auto-Migration State
+// ============================================================================
+
+/**
+ * Module-level flag to track if migration has been checked.
+ * After first check, we skip the expensive legacy DB check.
+ */
+let migrationChecked = false;
+
+/**
+ * Reset migration check flag (for testing)
+ * @internal
+ */
+export function resetMigrationCheck(): void {
+	migrationChecked = false;
+}
 
 // ============================================================================
 // Types
@@ -107,6 +127,65 @@ export interface OperationResult {
 }
 
 // ============================================================================
+// Auto-Migration Logic
+// ============================================================================
+
+/**
+ * Check and auto-migrate legacy memories if conditions are met
+ *
+ * Conditions:
+ * 1. Legacy database exists
+ * 2. Target database has 0 memories (first use)
+ *
+ * @param db - Target database adapter
+ */
+async function maybeAutoMigrate(db: DatabaseAdapter): Promise<void> {
+	try {
+		// Check if legacy database exists
+		if (!legacyDatabaseExists()) {
+			return;
+		}
+
+		// Check if target database is empty
+		const countResult = await db.query<{ count: string }>(
+			"SELECT COUNT(*) as count FROM memories",
+		);
+		const memoryCount = parseInt(countResult.rows[0]?.count || "0");
+
+		if (memoryCount > 0) {
+			// Target already has memories, skip migration
+			return;
+		}
+
+		console.log("[memory] Legacy database detected, starting auto-migration...");
+
+		// Run migration
+		const result = await migrateLegacyMemories({
+			targetDb: db,
+			dryRun: false,
+			onProgress: console.log,
+		});
+
+		if (result.migrated > 0) {
+			console.log(
+				`[memory] Auto-migrated ${result.migrated} memories from legacy database`,
+			);
+		}
+
+		if (result.failed > 0) {
+			console.warn(
+				`[memory] ${result.failed} memories failed to migrate. See errors above.`,
+			);
+		}
+	} catch (error) {
+		// Graceful degradation - log but don't throw
+		console.warn(
+			`[memory] Auto-migration failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+		);
+	}
+}
+
+// ============================================================================
 // Memory Adapter
 // ============================================================================
 
@@ -147,6 +226,12 @@ export interface MemoryAdapter {
 export async function createMemoryAdapter(
 	db: DatabaseAdapter,
 ): Promise<MemoryAdapter> {
+	// Auto-migrate legacy memories on first use
+	if (!migrationChecked) {
+		migrationChecked = true;
+		await maybeAutoMigrate(db);
+	}
+
 	const store = createMemoryStore(db);
 	const config = getDefaultConfig();
 	const ollamaLayer = makeOllamaLive(config);

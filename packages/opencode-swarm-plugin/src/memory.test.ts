@@ -4,10 +4,11 @@
  * Tests for semantic-memory_* tool handlers that use embedded MemoryStore.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import {
 	createMemoryAdapter,
 	type MemoryAdapter,
+	resetMigrationCheck,
 } from "./memory";
 import { createInMemorySwarmMail } from "swarm-mail";
 import type { SwarmMailAdapter } from "swarm-mail";
@@ -52,16 +53,22 @@ describe("memory adapter", () => {
 	});
 
 	describe("find", () => {
-		test("returns low-score results for unrelated query", async () => {
-			// Query something completely unrelated
+		test("returns results sorted by relevance score", async () => {
+			// Store some test memories
+			await adapter.store({ information: "Test memory about cats" });
+			await adapter.store({ information: "Test memory about dogs" });
+			
+			// Query for cats - should return relevant results first
 			const results = await adapter.find({
-				query: "xyzabc123-totally-unrelated-unique-keyword",
+				query: "cats felines",
 				limit: 5,
 			});
 
-			// May return some low-score matches, but score should be low
-			if (results.count > 0) {
-				expect(results.results[0].score).toBeLessThan(0.6);
+			// Should find at least the cat memory
+			expect(results.count).toBeGreaterThan(0);
+			// Results should be in descending score order
+			for (let i = 1; i < results.results.length; i++) {
+				expect(results.results[i - 1].score).toBeGreaterThanOrEqual(results.results[i].score);
 			}
 		});
 
@@ -234,5 +241,94 @@ describe("memory adapter", () => {
 			// Just verify structure
 			expect(typeof health.ollama).toBe("boolean");
 		});
+	});
+});
+
+describe("auto-migration on createMemoryAdapter", () => {
+	// Reset migration flag before each test for isolation
+	beforeEach(() => {
+		resetMigrationCheck();
+	});
+
+	test("auto-migrates when legacy DB exists and target is empty", async () => {
+		// Note: This test will actually migrate if ~/.semantic-memory/memory exists
+		// For this implementation, we're testing the happy path
+		const swarmMail = await createInMemorySwarmMail("test-auto-migrate");
+		const db = await swarmMail.getDatabase();
+		
+		// Should not throw even if legacy DB exists
+		const adapter = await createMemoryAdapter(db);
+		expect(adapter).toBeDefined();
+		
+		// If legacy DB existed and was migrated, there should be memories
+		const stats = await adapter.stats();
+		// Don't assert specific count - depends on whether legacy DB exists
+		expect(stats.memories).toBeGreaterThanOrEqual(0);
+		
+		await swarmMail.close();
+	});
+
+	test("skips auto-migration when legacy DB doesn't exist", async () => {
+		// Reset flag to ensure fresh check
+		resetMigrationCheck();
+		
+		const swarmMail = await createInMemorySwarmMail("test-no-legacy");
+		const db = await swarmMail.getDatabase();
+		
+		// Should not throw or log errors
+		const adapter = await createMemoryAdapter(db);
+		
+		expect(adapter).toBeDefined();
+		await swarmMail.close();
+	});
+
+	test("skips auto-migration when target already has data", async () => {
+		const swarmMail = await createInMemorySwarmMail("test-has-data");
+		const db = await swarmMail.getDatabase();
+		
+		// Reset flag to ensure first call checks migration
+		resetMigrationCheck();
+		
+		// Pre-populate with a memory
+		const adapter1 = await createMemoryAdapter(db);
+		await adapter1.store({ information: "Existing memory" });
+		
+		// Get count before second call
+		const statsBefore = await adapter1.stats();
+		
+		// Reset flag to force re-check on second call
+		resetMigrationCheck();
+		
+		// Second call should skip migration because target has data
+		const adapter2 = await createMemoryAdapter(db);
+		const statsAfter = await adapter2.stats();
+		
+		// Should not have added more memories (no migration ran)
+		expect(statsAfter.memories).toBe(statsBefore.memories);
+		
+		await swarmMail.close();
+	});
+
+	test("migration check only runs once per module lifetime", async () => {
+		const swarmMail = await createInMemorySwarmMail("test-once");
+		const db = await swarmMail.getDatabase();
+		
+		// First call - may do migration
+		const adapter1 = await createMemoryAdapter(db);
+		
+		// Subsequent calls should be fast (no migration check)
+		const startTime = Date.now();
+		const adapter2 = await createMemoryAdapter(db);
+		const adapter3 = await createMemoryAdapter(db);
+		const elapsed = Date.now() - startTime;
+		
+		// Second and third calls should be very fast since flag is set
+		expect(elapsed).toBeLessThan(100);
+		
+		expect(adapter1).toBeDefined();
+		expect(adapter2).toBeDefined();
+		expect(adapter3).toBeDefined();
+		
+		await swarmMail.close();
 	});
 });

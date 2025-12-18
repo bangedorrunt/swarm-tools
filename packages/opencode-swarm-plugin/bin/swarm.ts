@@ -35,6 +35,12 @@ import {
   ensureHiveDirectory,
   getHiveAdapter,
 } from "../src/hive";
+import {
+  legacyDatabaseExists,
+  getMigrationStatus,
+  migrateLegacyMemories,
+} from "swarm-mail";
+import { getSwarmMail } from "swarm-mail";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -1660,6 +1666,102 @@ async function setup() {
       }
     } else {
       p.log.warn("Skipping migration - .beads will continue to work but is deprecated");
+    }
+  }
+
+  // Check for legacy semantic-memory migration
+  if (legacyDatabaseExists()) {
+    p.log.step("Legacy semantic-memory detected");
+    
+    const migrationStatus = await getMigrationStatus();
+    if (migrationStatus) {
+      const { total, withEmbeddings } = migrationStatus;
+      p.log.message(dim(`  Found ${total} memories (${withEmbeddings} with embeddings)`));
+      
+      const shouldMigrate = await p.confirm({
+        message: "Migrate semantic-memory to swarm-mail? (recommended)",
+        initialValue: true,
+      });
+
+      if (p.isCancel(shouldMigrate)) {
+        p.cancel("Setup cancelled");
+        process.exit(0);
+      }
+
+      if (shouldMigrate) {
+        const migrateSpinner = p.spinner();
+        migrateSpinner.start("Migrating semantic-memory...");
+        
+        try {
+          // Get swarm-mail database for this project
+          const targetDb = await getSwarmMail(cwd);
+          
+          // Run migration with progress updates
+          const result = await migrateLegacyMemories({
+            targetDb,
+            onProgress: (msg) => {
+              // Update spinner message for key milestones
+              if (msg.includes("complete") || msg.includes("Progress:")) {
+                migrateSpinner.message(msg.replace("[migrate] ", ""));
+              }
+            },
+          });
+          
+          migrateSpinner.stop("Migration complete");
+          
+          if (result.migrated > 0) {
+            p.log.success(`Migrated ${result.migrated} memories`);
+          }
+          if (result.skipped > 0) {
+            p.log.message(dim(`  Skipped ${result.skipped} (already exist)`));
+          }
+          if (result.failed > 0) {
+            p.log.warn(`Failed to migrate ${result.failed} memories`);
+            for (const error of result.errors.slice(0, 3)) {
+              p.log.message(dim(`  ${error}`));
+            }
+            if (result.errors.length > 3) {
+              p.log.message(dim(`  ... and ${result.errors.length - 3} more errors`));
+            }
+          }
+        } catch (error) {
+          migrateSpinner.stop("Migration failed");
+          p.log.error(error instanceof Error ? error.message : String(error));
+        }
+      } else {
+        p.log.warn("Skipping migration - legacy semantic-memory will continue to work but is deprecated");
+      }
+    }
+  }
+
+  // Check for legacy semantic-memory MCP server in OpenCode config
+  const opencodeConfigPath = join(configDir, 'config.json');
+  if (existsSync(opencodeConfigPath)) {
+    try {
+      const opencodeConfig = JSON.parse(readFileSync(opencodeConfigPath, 'utf-8'));
+      if (opencodeConfig.mcpServers?.['semantic-memory']) {
+        p.log.step('Legacy semantic-memory MCP server detected');
+        
+        const removeMcp = await p.confirm({
+          message: 'Remove legacy semantic-memory MCP? (now embedded in plugin)',
+          initialValue: true,
+        });
+
+        if (p.isCancel(removeMcp)) {
+          p.cancel('Setup cancelled');
+          process.exit(0);
+        }
+
+        if (removeMcp) {
+          delete opencodeConfig.mcpServers['semantic-memory'];
+          writeFileSync(opencodeConfigPath, JSON.stringify(opencodeConfig, null, 2));
+          p.log.success('Removed semantic-memory from MCP servers');
+        } else {
+          p.log.warn('Keeping legacy MCP - you may see duplicate tools');
+        }
+      }
+    } catch (error) {
+      // Silently ignore config parse errors
     }
   }
 

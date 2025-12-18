@@ -114,3 +114,14 @@ export {
   memoryMigration,
   memoryMigrations,
 } from "./memory/migrations";
+
+export {
+  legacyDatabaseExists,
+  migrateLegacyMemories,
+  getMigrationStatus,
+  getDefaultLegacyPath,
+} from "./memory/migrate-legacy";
+export type {
+  MigrationOptions,
+  MigrationResult,
+} from "./memory/migrate-legacy";
