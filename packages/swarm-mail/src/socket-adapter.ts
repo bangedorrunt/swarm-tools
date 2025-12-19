@@ -133,7 +133,7 @@ export async function createSocketAdapter(
 			host: options.host,
 			port: options.port,
 			connect_timeout: options.timeout,
-			max: options.max ?? 10,
+			max: options.max ?? 1, // Single connection to avoid UNSAFE_TRANSACTION errors
 			// Disable connection pooling idle timeout - keep connections alive
 			idle_timeout: 0,
 			// Disable max lifetime - connections persist until explicitly closed
