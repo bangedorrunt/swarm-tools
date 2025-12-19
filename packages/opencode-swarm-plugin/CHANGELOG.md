@@ -1,5 +1,25 @@
 # opencode-swarm-plugin
 
+## 0.31.6
+
+### Patch Changes
+
+- [`3147d36`](https://github.com/joelhooks/swarm-tools/commit/3147d36cf2355b9cfe461c7dfc3b30675ea36d89) Thanks [@joelhooks](https://github.com/joelhooks)! - ## 🚪 Setup Now Exits Cleanly After Migration
+
+  Fixed a process hang where `swarm setup` would complete the migration but never exit.
+
+  **Root cause:** The PGLite connection created for memory migration kept the Node.js event loop alive indefinitely.
+
+  **Fix:** Close the swarmMail connection after migration completes. The connection is scoped to the migration block and not needed afterward.
+
+  ```typescript
+  // After migration completes
+  await swarmMail.close();
+  ```
+
+  **Before:** `swarm setup` hangs after "Migration complete" message
+  **After:** Process exits cleanly, returns to shell
+
 ## 0.31.5
 
 ### Patch Changes
