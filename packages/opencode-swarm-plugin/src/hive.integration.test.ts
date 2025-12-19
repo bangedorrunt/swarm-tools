@@ -1779,4 +1779,95 @@ describe("beads integration", () => {
       }
     });
   });
+
+  describe("bigint to Date conversion", () => {
+    it("should handle PGLite bigint timestamps correctly in hive_query", async () => {
+      const { mkdirSync, rmSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+
+      const tempProject = join(tmpdir(), `hive-bigint-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create a cell
+        const createResponse = await hive_create.execute(
+          { title: "Test bigint dates", type: "task" },
+          mockContext
+        );
+        const created = parseResponse<Cell>(createResponse);
+        
+        // Query it back - this triggers formatCellForOutput with PGLite bigint timestamps
+        const queryResponse = await hive_query.execute({ status: "open" }, mockContext);
+        const queried = parseResponse<Cell[]>(queryResponse);
+
+        expect(queried.length).toBeGreaterThan(0);
+        const cell = queried.find(c => c.id === created.id);
+        expect(cell).toBeDefined();
+
+        // These should be valid ISO date strings, not "Invalid Date"
+        expect(cell!.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(cell!.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(cell!.created_at).not.toBe("Invalid Date");
+        expect(cell!.updated_at).not.toBe("Invalid Date");
+
+        // Verify dates are actually valid by parsing
+        const createdDate = new Date(cell!.created_at);
+        const updatedDate = new Date(cell!.updated_at);
+        expect(createdDate.getTime()).toBeGreaterThan(0);
+        expect(updatedDate.getTime()).toBeGreaterThan(0);
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it("should handle closed_at bigint timestamp correctly", async () => {
+      const { mkdirSync, rmSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+
+      const tempProject = join(tmpdir(), `hive-bigint-closed-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create and close a cell
+        const createResponse = await hive_create.execute(
+          { title: "Test closed bigint date", type: "task" },
+          mockContext
+        );
+        const created = parseResponse<Cell>(createResponse);
+
+        await hive_close.execute(
+          { id: created.id, reason: "Testing bigint closed_at" },
+          mockContext
+        );
+
+        // Query closed cells
+        const queryResponse = await hive_query.execute({ status: "closed" }, mockContext);
+        const queried = parseResponse<Cell[]>(queryResponse);
+
+        const cell = queried.find(c => c.id === created.id);
+        expect(cell).toBeDefined();
+        expect(cell!.closed_at).toBeDefined();
+        expect(cell!.closed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(cell!.closed_at).not.toBe("Invalid Date");
+
+        // Verify closed_at is valid
+        const closedDate = new Date(cell!.closed_at!);
+        expect(closedDate.getTime()).toBeGreaterThan(0);
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+  });
 });

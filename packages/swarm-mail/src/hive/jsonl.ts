@@ -204,10 +204,10 @@ export async function exportToJSONL(
       status: bead.deleted_at ? "tombstone" : (bead.status as any),
       priority: bead.priority as number,
       issue_type: bead.type as any,
-      created_at: new Date(bead.created_at as number).toISOString(),
-      updated_at: new Date(bead.updated_at as number).toISOString(),
+      created_at: new Date(Number(bead.created_at)).toISOString(),
+      updated_at: new Date(Number(bead.updated_at)).toISOString(),
       closed_at: bead.closed_at
-        ? new Date(bead.closed_at as number).toISOString()
+        ? new Date(Number(bead.closed_at)).toISOString()
         : undefined,
       assignee: bead.assignee || undefined,
       parent_id: bead.parent_id || undefined,
@@ -462,10 +462,10 @@ async function computeBeadHash(
     status: cell.deleted_at ? "tombstone" : (cell.status as any),
     priority: cell.priority as number,
     issue_type: cell.type as any,
-    created_at: new Date(cell.created_at as number).toISOString(),
-    updated_at: new Date(cell.updated_at as number).toISOString(),
+    created_at: new Date(Number(cell.created_at)).toISOString(),
+    updated_at: new Date(Number(cell.updated_at)).toISOString(),
     closed_at: cell.closed_at
-      ? new Date(cell.closed_at as number).toISOString()
+      ? new Date(Number(cell.closed_at)).toISOString()
       : undefined,
     assignee: cell.assignee || undefined,
     parent_id: cell.parent_id || undefined,

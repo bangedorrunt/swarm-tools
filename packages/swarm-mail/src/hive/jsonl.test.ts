@@ -493,6 +493,86 @@ describe("JSONL Export/Import", () => {
     });
   });
 
+  describe("Date handling (ISO strings)", () => {
+    it("parseJSONL handles ISO date strings correctly", () => {
+      const jsonl = JSON.stringify({
+        id: "bd-date123",
+        title: "Date test",
+        status: "open",
+        priority: 2,
+        issue_type: "task",
+        created_at: "2025-12-19T17:14:05.371Z", // ISO string, not epoch
+        updated_at: "2025-12-19T17:14:05.371Z",
+        dependencies: [],
+        labels: [],
+        comments: [],
+      });
+
+      const beads = parseJSONL(jsonl);
+
+      expect(beads).toHaveLength(1);
+      expect(beads[0].created_at).toBe("2025-12-19T17:14:05.371Z");
+      expect(beads[0].updated_at).toBe("2025-12-19T17:14:05.371Z");
+    });
+
+    it("exportToJSONL produces valid Date objects from ISO strings", async () => {
+      const bead = await adapter.createCell(projectKey, {
+        title: "Date export test",
+        type: "task",
+      });
+
+      const jsonl = await exportToJSONL(adapter, projectKey);
+      const beads = parseJSONL(jsonl);
+
+      expect(beads).toHaveLength(1);
+      
+      // created_at and updated_at should be valid ISO strings
+      const createdDate = new Date(beads[0].created_at);
+      const updatedDate = new Date(beads[0].updated_at);
+      
+      expect(createdDate.toString()).not.toBe("Invalid Date");
+      expect(updatedDate.toString()).not.toBe("Invalid Date");
+      expect(Number.isNaN(createdDate.getTime())).toBe(false);
+      expect(Number.isNaN(updatedDate.getTime())).toBe(false);
+    });
+
+    it("handles undefined closed_at without Invalid Date", async () => {
+      const bead = await adapter.createCell(projectKey, {
+        title: "Open task",
+        type: "task",
+      });
+
+      const jsonl = await exportToJSONL(adapter, projectKey);
+      const beads = parseJSONL(jsonl);
+
+      expect(beads).toHaveLength(1);
+      expect(beads[0].closed_at).toBeUndefined();
+      
+      // Re-import should not throw Invalid Date error
+      const result = await importFromJSONL(adapter, projectKey, jsonl);
+      expect(result.created + result.updated + result.skipped).toBe(1);
+    });
+
+    it("handles closed_at ISO string correctly", async () => {
+      const bead = await adapter.createCell(projectKey, {
+        title: "Closed task",
+        type: "task",
+      });
+      await adapter.closeCell(projectKey, bead.id, "Test complete", { closed_by: "test" });
+
+      const jsonl = await exportToJSONL(adapter, projectKey);
+      const beads = parseJSONL(jsonl);
+
+      expect(beads).toHaveLength(1);
+      expect(beads[0].closed_at).toBeDefined();
+      
+      // closed_at should be valid ISO string
+      const closedDate = new Date(beads[0].closed_at!);
+      expect(closedDate.toString()).not.toBe("Invalid Date");
+      expect(Number.isNaN(closedDate.getTime())).toBe(false);
+    });
+  });
+
   describe("importFromJSONL", () => {
     it("imports new beads", async () => {
       const jsonl = serializeToJSONL({

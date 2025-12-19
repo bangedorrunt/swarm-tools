@@ -587,10 +587,10 @@ function formatCellForOutput(adapterCell: AdapterCell): Record<string, unknown> 
     status: adapterCell.status,
     priority: adapterCell.priority,
     issue_type: adapterCell.type, // Adapter: type → Schema: issue_type
-    created_at: new Date(adapterCell.created_at).toISOString(),
-    updated_at: new Date(adapterCell.updated_at).toISOString(),
+    created_at: new Date(Number(adapterCell.created_at)).toISOString(),
+    updated_at: new Date(Number(adapterCell.updated_at)).toISOString(),
     closed_at: adapterCell.closed_at
-      ? new Date(adapterCell.closed_at).toISOString()
+      ? new Date(Number(adapterCell.closed_at)).toISOString()
       : undefined,
     parent_id: adapterCell.parent_id || undefined,
     dependencies: [], // TODO: fetch from adapter if needed
