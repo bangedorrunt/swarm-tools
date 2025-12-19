@@ -1,5 +1,29 @@
 # opencode-swarm-plugin
 
+## 0.31.7
+
+### Patch Changes
+
+- [`97e89a6`](https://github.com/joelhooks/swarm-tools/commit/97e89a6d944b70f205eeb83eb3f2c55a42f5dc08) Thanks [@joelhooks](https://github.com/joelhooks)! - ## 🐝 Setup Skips Already-Migrated Memories
+
+  `swarm setup` now detects when semantic memories have already been migrated and skips the migration prompt entirely.
+
+  **Before:** Setup would prompt "Migrate to swarm-mail database?" even when all memories were already migrated, then hang.
+
+  **After:** Setup checks if target database has memories first. If already migrated, shows dim "Already migrated to swarm-mail" and moves on.
+
+  **Changes:**
+
+  - Added `targetHasMemories(targetDb)` function to swarm-mail
+  - Updated setup flow to check target before prompting
+  - Fixed connection cleanup in all code paths (try/finally pattern)
+  - Suppressed internal PGLite NOTICE messages from user output
+
+  **Root cause of hang:** PGLite connection wasn't being closed in all paths, keeping the Node.js event loop alive indefinitely.
+
+- Updated dependencies [[`97e89a6`](https://github.com/joelhooks/swarm-tools/commit/97e89a6d944b70f205eeb83eb3f2c55a42f5dc08)]:
+  - swarm-mail@1.2.2
+
 ## 0.31.6
 
 ### Patch Changes
