@@ -406,7 +406,7 @@ describe("beads integration", () => {
   });
 
   describe("hive_create_epic", () => {
-    it("creates an epic with subtasks", async () => {
+    it("creates an epic with subtasks and syncs to JSONL", async () => {
       const result = await hive_create_epic.execute(
         {
           epic_title: "Integration test epic",
@@ -437,6 +437,28 @@ describe("beads integration", () => {
         const subtaskBead = await adapter.getCell(TEST_PROJECT_KEY, subtask.id);
         expect(subtaskBead).toBeDefined();
         expect(subtaskBead!.parent_id).toBe(epicResult.epic.id);
+      }
+      
+      // NEW TEST: Verify cells are synced to JSONL immediately
+      const { readFileSync, existsSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const jsonlPath = join(TEST_PROJECT_KEY, ".hive", "issues.jsonl");
+      
+      expect(existsSync(jsonlPath)).toBe(true);
+      
+      const jsonlContent = readFileSync(jsonlPath, "utf-8");
+      const lines = jsonlContent.trim().split("\n").filter(l => l);
+      const cells = lines.map(line => JSON.parse(line));
+      
+      // Epic and all subtasks should be in JSONL
+      const epicInJsonl = cells.find(c => c.id === epicResult.epic.id);
+      expect(epicInJsonl).toBeDefined();
+      expect(epicInJsonl!.title).toBe("Integration test epic");
+      
+      for (const subtask of epicResult.subtasks) {
+        const subtaskInJsonl = cells.find(c => c.id === subtask.id);
+        expect(subtaskInJsonl).toBeDefined();
+        expect(subtaskInJsonl!.parent_id).toBe(epicResult.epic.id);
       }
     });
 
@@ -1623,6 +1645,138 @@ describe("beads integration", () => {
       
       // Cleanup
       rmSync(tempProject, { recursive: true, force: true });
+    });
+  });
+
+  describe("process exit hook", () => {
+    it("registers beforeExit hook that syncs dirty cells", async () => {
+      const { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+      const { execSync } = await import("node:child_process");
+
+      // Create temp project
+      const tempProject = join(tmpdir(), `hive-exit-hook-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+
+      // Initialize git repo
+      execSync("git init", { cwd: tempProject });
+      execSync('git config user.email "test@example.com"', { cwd: tempProject });
+      execSync('git config user.name "Test User"', { cwd: tempProject });
+
+      // Initial commit with empty issues.jsonl
+      writeFileSync(join(hiveDir, "issues.jsonl"), "");
+      execSync("git add .", { cwd: tempProject });
+      execSync('git commit -m "initial"', { cwd: tempProject });
+
+      // Set working directory
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create a cell (marks it dirty but don't sync)
+        await hive_create.execute(
+          { title: "Exit hook test cell", type: "task" },
+          mockContext,
+        );
+
+        // Verify cell is NOT in JSONL yet (only in PGLite)
+        const beforeContent = readFileSync(join(hiveDir, "issues.jsonl"), "utf-8");
+        expect(beforeContent.trim()).toBe("");
+
+        // Simulate process exit by triggering beforeExit event
+        process.emit("beforeExit", 0);
+
+        // Wait for async flush to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Verify cell was synced to JSONL by the exit hook
+        const afterContent = readFileSync(join(hiveDir, "issues.jsonl"), "utf-8");
+        expect(afterContent.trim()).not.toBe("");
+
+        const cells = afterContent.trim().split("\n").map(line => JSON.parse(line));
+        expect(cells).toHaveLength(1);
+        expect(cells[0].title).toBe("Exit hook test cell");
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it("exit hook is idempotent - safe to call multiple times", async () => {
+      const { mkdirSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+
+      // Create temp project
+      const tempProject = join(tmpdir(), `hive-exit-hook-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+      writeFileSync(join(hiveDir, "issues.jsonl"), "");
+
+      // Set working directory
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create a cell
+        await hive_create.execute(
+          { title: "Idempotent test cell", type: "task" },
+          mockContext,
+        );
+
+        // Trigger exit hook multiple times
+        process.emit("beforeExit", 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        process.emit("beforeExit", 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // Verify cell is written only once (no duplication)
+        const content = readFileSync(join(hiveDir, "issues.jsonl"), "utf-8");
+        const lines = content.trim().split("\n").filter(l => l);
+        
+        // Should have exactly one cell (even though we triggered hook twice)
+        expect(lines.length).toBeGreaterThanOrEqual(1);
+        
+        // All cells should have unique IDs
+        const cells = lines.map(line => JSON.parse(line));
+        const uniqueIds = new Set(cells.map(c => c.id));
+        expect(uniqueIds.size).toBe(cells.length);
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it("exit hook handles case with no dirty cells gracefully", async () => {
+      const { mkdirSync, rmSync, writeFileSync, readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const { tmpdir } = await import("node:os");
+
+      // Create temp project with empty JSONL
+      const tempProject = join(tmpdir(), `hive-exit-hook-test-${Date.now()}`);
+      const hiveDir = join(tempProject, ".hive");
+      mkdirSync(hiveDir, { recursive: true });
+      writeFileSync(join(hiveDir, "issues.jsonl"), "");
+
+      // Set working directory
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Trigger exit hook with no dirty cells (should not throw)
+        process.emit("beforeExit", 0);
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        // JSONL should still be empty (no error thrown)
+        const content = readFileSync(join(hiveDir, "issues.jsonl"), "utf-8");
+        expect(content.trim()).toBe("");
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
     });
   });
 });

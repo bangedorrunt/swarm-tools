@@ -72,7 +72,7 @@ import {
   isToolAvailable,
   warnMissingTool,
 } from "./tool-availability";
-import { getHiveAdapter } from "./hive";
+import { getHiveAdapter, hive_sync, setHiveWorkingDirectory, getHiveWorkingDirectory } from "./hive";
 import { listSkills } from "./skills";
 import {
   canUseWorktreeIsolation,
@@ -1570,6 +1570,30 @@ This will be recorded as a negative learning signal.`;
         );
       }
 
+      // Sync cell to .hive/issues.jsonl (auto-sync on complete)
+      // This ensures the worker's completed work persists before process exits
+      let syncSuccess = false;
+      let syncError: string | undefined;
+      try {
+        // Save current working directory and set to project path
+        const previousWorkingDir = getHiveWorkingDirectory();
+        setHiveWorkingDirectory(args.project_key);
+        
+        try {
+          const syncResult = await hive_sync.execute({ auto_pull: false }, _ctx);
+          syncSuccess = !syncResult.includes("error");
+        } finally {
+          // Restore previous working directory
+          setHiveWorkingDirectory(previousWorkingDir);
+        }
+      } catch (error) {
+        // Non-fatal - log warning but don't block completion
+        syncError = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[swarm_complete] Auto-sync failed (non-fatal): ${syncError}`,
+        );
+      }
+
       // Emit SubtaskOutcomeEvent for learning system
       try {
         const epicId = args.bead_id.includes(".")
@@ -1709,6 +1733,8 @@ This will be recorded as a negative learning signal.`;
         bead_id: args.bead_id,
         closed: true,
         reservations_released: true,
+        synced: syncSuccess,
+        sync_error: syncError,
         message_sent: messageSent,
         message_error: messageError,
         agent_registration: {

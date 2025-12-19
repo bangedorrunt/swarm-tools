@@ -2341,4 +2341,74 @@ describe("Contract Validation", () => {
       expect(parsed.error).toBeUndefined();
     });
   });
+
+  describe("swarm_complete auto-sync", () => {
+    it("calls hive_sync after closing cell on successful completion", async () => {
+      const testProjectPath = "/tmp/swarm-auto-sync-test-" + Date.now();
+      const { getHiveAdapter } = await import("./hive");
+      const adapter = await getHiveAdapter(testProjectPath);
+
+      // Create a task cell directly
+      const cell = await adapter.createCell(testProjectPath, {
+        title: "Test task for auto-sync",
+        type: "task",
+        priority: 2,
+      });
+
+      // Start the task
+      await adapter.updateCell(testProjectPath, cell.id, {
+        status: "in_progress",
+      });
+
+      // Complete with skip_review and skip_verification
+      const result = await swarm_complete.execute(
+        {
+          project_key: testProjectPath,
+          agent_name: "TestAgent",
+          bead_id: cell.id,
+          summary: "Done - testing auto-sync",
+          files_touched: [],
+          skip_verification: true,
+          skip_review: true,
+        },
+        mockContext,
+      );
+
+      const parsed = JSON.parse(result);
+
+      // Should complete successfully
+      expect(parsed.success).toBe(true);
+      expect(parsed.closed).toBe(true);
+
+      // Check that cell is actually closed in database
+      const closedCell = await adapter.getCell(testProjectPath, cell.id);
+      expect(closedCell?.status).toBe("closed");
+
+      // The sync should have flushed the cell to .hive/issues.jsonl
+      // We can verify the cell appears in the JSONL
+      const hivePath = `${testProjectPath}/.hive/issues.jsonl`;
+      const hiveFile = Bun.file(hivePath);
+      const exists = await hiveFile.exists();
+
+      // The file should exist after sync
+      expect(exists).toBe(true);
+
+      if (exists) {
+        const content = await hiveFile.text();
+        const lines = content.trim().split("\n");
+
+        // Should have at least one cell exported
+        expect(lines.length).toBeGreaterThan(0);
+
+        // Parse the exported cells to find our closed cell
+        const cells = lines.map((line) => JSON.parse(line));
+        const exportedCell = cells.find((c) => c.id === cell.id);
+
+        // Our cell should be in the export
+        expect(exportedCell).toBeDefined();
+        expect(exportedCell.status).toBe("closed");
+        expect(exportedCell.title).toBe("Test task for auto-sync");
+      }
+    });
+  });
 });

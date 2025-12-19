@@ -424,6 +424,78 @@ export async function importJsonlToPGLite(projectPath: string): Promise<{
  */
 const adapterCache = new Map<string, HiveAdapter>();
 
+// ============================================================================
+// Process Exit Hook - Safety Net for Dirty Cells
+// ============================================================================
+
+/**
+ * Track if exit hook is already registered (prevent duplicate registrations)
+ */
+let exitHookRegistered = false;
+
+/**
+ * Track if exit hook is currently running (prevent re-entry)
+ */
+let exitHookRunning = false;
+
+/**
+ * Register process.on('beforeExit') handler to flush dirty cells
+ * This is a safety net - catches any dirty cells that weren't explicitly synced
+ * 
+ * Idempotent - safe to call multiple times (only registers once)
+ */
+function registerExitHook(): void {
+  if (exitHookRegistered) {
+    return; // Already registered
+  }
+  
+  exitHookRegistered = true;
+  
+  process.on('beforeExit', async (code) => {
+    // Prevent re-entry if already flushing
+    if (exitHookRunning) {
+      return;
+    }
+    
+    exitHookRunning = true;
+    
+    try {
+      // Flush all projects that have adapters (and potentially dirty cells)
+      const flushPromises: Promise<void>[] = [];
+      
+      for (const [projectKey, adapter] of adapterCache.entries()) {
+        const flushPromise = (async () => {
+          try {
+            ensureHiveDirectory(projectKey);
+            const flushManager = new FlushManager({
+              adapter,
+              projectKey,
+              outputPath: `${projectKey}/.hive/issues.jsonl`,
+            });
+            await flushManager.flush();
+          } catch (error) {
+            // Non-fatal - log and continue
+            console.warn(
+              `[hive exit hook] Failed to flush ${projectKey}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          }
+        })();
+        
+        flushPromises.push(flushPromise);
+      }
+      
+      // Wait for all flushes to complete
+      await Promise.all(flushPromises);
+    } finally {
+      exitHookRunning = false;
+    }
+  });
+}
+
+// Register exit hook immediately when module is imported
+registerExitHook();
+
 /**
  * Get or create a HiveAdapter instance for a project
  * Exported for testing - allows tests to verify state directly
@@ -693,6 +765,23 @@ export const hive_create_epic = tool({
             error,
           );
         }
+      }
+
+      // Sync cells to JSONL so spawned workers can see them immediately
+      try {
+        ensureHiveDirectory(projectKey);
+        const flushManager = new FlushManager({
+          adapter,
+          projectKey,
+          outputPath: `${projectKey}/.hive/issues.jsonl`,
+        });
+        await flushManager.flush();
+      } catch (error) {
+        // Non-fatal - log and continue
+        console.warn(
+          "[hive_create_epic] Failed to sync to JSONL:",
+          error,
+        );
       }
 
       return JSON.stringify(result, null, 2);
