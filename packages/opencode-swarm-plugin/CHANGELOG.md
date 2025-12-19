@@ -1,5 +1,11 @@
 # opencode-swarm-plugin
 
+## 0.31.2
+
+### Patch Changes
+
+- [`d5ec86e`](https://github.com/joelhooks/swarm-tools/commit/d5ec86e77bdb1cd06cf168946aaaff91208dfac1) Thanks [@joelhooks](https://github.com/joelhooks)! - Rebuild with fixed swarm-mail dependency (bigint date fix)
+
 ## 0.31.1
 
 ### Patch Changes
