@@ -40,8 +40,8 @@ import {
   getMigrationStatus,
   migrateLegacyMemories,
   targetHasMemories,
+  getSwarmMailLibSQL,
 } from "swarm-mail";
-import { getSwarmMail } from "swarm-mail";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -1691,7 +1691,7 @@ async function setup() {
     // Check if target database already has memories (already migrated)
     let swarmMail = null;
     try {
-      swarmMail = await getSwarmMail(cwd);
+      swarmMail = await getSwarmMailLibSQL(cwd);
       const targetDb = await swarmMail.getDatabase(cwd);
       const alreadyMigrated = await targetHasMemories(targetDb);
       
@@ -1725,7 +1725,7 @@ async function setup() {
             
             try {
               // Get swarm-mail database for this project
-              swarmMail = await getSwarmMail(cwd);
+              swarmMail = await getSwarmMailLibSQL(cwd);
               const targetDb = await swarmMail.getDatabase(cwd);
               migrateSpinner.message("Migrating memories...");
               

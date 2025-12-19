@@ -30,7 +30,7 @@
   "author": "Joel Hooks",
   "license": "MIT",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node --external @electric-sql/pglite --external postgres && tsc",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --external @libsql/client && tsc",
     "test": "bun test src/streams/ src/memory/ src/hive/ --timeout 60000",
     "test:beads": "bun test src/beads/ --timeout 60000",
     "test:integration": "vitest run src/streams/**/*.integration-test.ts --testTimeout 60000",
@@ -38,13 +38,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@electric-sql/pglite": "0.3.14",
-    "@electric-sql/pglite-socket": "^0.0.19",
     "@libsql/client": "^0.15.15",
     "effect": "^3.19.12",
     "minimatch": "^10.1.1",
     "nanoid": "^5.1.6",
-    "postgres": "^3.4.7",
     "proper-lockfile": "^4.1.2",
     "zod": "4.1.8"
   },

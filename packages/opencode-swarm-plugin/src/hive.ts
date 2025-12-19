@@ -22,7 +22,7 @@ import {
   syncMemories,
   type HiveAdapter,
   type Cell as AdapterCell,
-  getSwarmMail,
+  getSwarmMailLibSQL,
   resolvePartialId,
 } from "swarm-mail";
 import { existsSync, readFileSync } from "node:fs";
@@ -508,7 +508,7 @@ export async function getHiveAdapter(projectKey: string): Promise<HiveAdapter> {
     return adapterCache.get(projectKey)!;
   }
 
-  const swarmMail = await getSwarmMail(projectKey);
+  const swarmMail = await getSwarmMailLibSQL(projectKey);
   const db = await swarmMail.getDatabase();
   const adapter = createHiveAdapter(db, projectKey);
 
@@ -1158,7 +1158,7 @@ export const hive_sync = tool({
     );
 
     // 2b. Sync memories to JSONL
-    const swarmMail = await getSwarmMail(projectKey);
+    const swarmMail = await getSwarmMailLibSQL(projectKey);
     const db = await swarmMail.getDatabase();
     const hivePath = join(projectKey, ".hive");
     let memoriesSynced = 0;

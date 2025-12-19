@@ -14,7 +14,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { getSwarmMail } from "swarm-mail";
+import { getSwarmMailLibSQL } from "swarm-mail";
 import {
 	createMemoryAdapter,
 	type MemoryAdapter,
@@ -76,7 +76,7 @@ async function getMemoryAdapter(
 	}
 
 	// Create new adapter
-	const swarmMail = await getSwarmMail(path);
+	const swarmMail = await getSwarmMailLibSQL(path);
 	const db = await swarmMail.getDatabase();
 	cachedAdapter = await createMemoryAdapter(db);
 	cachedProjectPath = path;

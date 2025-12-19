@@ -1,10 +1,10 @@
 /**
  * Swarm Mail - Actor-model primitives for multi-agent coordination
  *
- * ## Simple API (PGLite convenience layer)
+ * ## Simple API (libSQL convenience layer)
  * ```typescript
- * import { getSwarmMail } from '@opencode/swarm-mail';
- * const swarmMail = await getSwarmMail('/path/to/project');
+ * import { getSwarmMailLibSQL } from '@opencode/swarm-mail';
+ * const swarmMail = await getSwarmMailLibSQL('/path/to/project');
  * ```
  *
  * ## Advanced API (database-agnostic adapter)
@@ -37,31 +37,38 @@ export type {
   Conflict,
 } from "./types";
 
+
+
 // ============================================================================
-// PGLite Convenience Layer
+// LibSQL Adapter
 // ============================================================================
 
+export { createLibSQLAdapter } from "./libsql";
+export type { LibSQLConfig } from "./libsql";
+
+// LibSQL Convenience Layer
 export {
-  getSwarmMail,
-  getSwarmMailSocket,
-  createInMemorySwarmMail,
-  closeSwarmMail,
-  closeAllSwarmMail,
-  getDatabasePath,
-  getProjectTempDirName,
-  hashProjectPath,
-  PGlite,
-} from "./pglite";
+  getSwarmMailLibSQL,
+  createInMemorySwarmMailLibSQL,
+  closeSwarmMailLibSQL,
+  closeAllSwarmMailLibSQL,
+  getDatabasePath as getLibSQLDatabasePath,
+  getProjectTempDirName as getLibSQLProjectTempDirName,
+  hashProjectPath as hashLibSQLProjectPath,
+} from "./libsql.convenience";
 
-// ============================================================================
-// Socket Adapter (postgres.js)
-// ============================================================================
-
+// LibSQL Schemas
 export {
-  wrapPostgres,
-  createSocketAdapter,
-} from "./socket-adapter";
-export type { SocketAdapterOptions } from "./socket-adapter";
+  createLibSQLStreamsSchema,
+  dropLibSQLStreamsSchema,
+  validateLibSQLStreamsSchema,
+} from "./streams/libsql-schema";
+export {
+  createLibSQLMemorySchema,
+  dropLibSQLMemorySchema,
+  validateLibSQLMemorySchema,
+  EMBEDDING_DIM as LIBSQL_EMBEDDING_DIM,
+} from "./memory/libsql-schema";
 
 // ============================================================================
 // Re-export everything from streams for backward compatibility
@@ -75,18 +82,7 @@ export * from "./streams";
 
 export * from "./hive";
 
-// ============================================================================
-// Daemon Lifecycle Management
-// ============================================================================
 
-export {
-  startDaemon,
-  stopDaemon,
-  isDaemonRunning,
-  healthCheck,
-  getPidFilePath,
-} from "./daemon";
-export type { DaemonOptions, DaemonInfo } from "./daemon";
 
 // ============================================================================
 // Memory Module Exports (semantic memory store)
