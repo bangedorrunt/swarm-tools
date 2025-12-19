@@ -1889,9 +1889,43 @@ async function setup() {
     process.exit(0);
   }
 
+  // Lite model selection for simple tasks (docs, tests)
+  const liteModel = await p.select({
+    message: "Select lite model (for docs, tests, simple edits):",
+    options: [
+      {
+        value: "anthropic/claude-haiku-4-5",
+        label: "Claude Haiku 4.5",
+        hint: "Fast and cost-effective (recommended)",
+      },
+      {
+        value: "anthropic/claude-sonnet-4-5",
+        label: "Claude Sonnet 4.5",
+        hint: "More capable, slower",
+      },
+      {
+        value: "openai/gpt-4o-mini",
+        label: "GPT-4o Mini",
+        hint: "Fast and cheap",
+      },
+      {
+        value: "google/gemini-2.0-flash",
+        label: "Gemini 2.0 Flash",
+        hint: "Fast and capable",
+      },
+    ],
+    initialValue: "anthropic/claude-haiku-4-5",
+  });
+
+  if (p.isCancel(liteModel)) {
+    p.cancel("Setup cancelled");
+    process.exit(0);
+  }
+
   p.log.success("Selected models:");
   p.log.message(dim(`  Coordinator: ${coordinatorModel}`));
   p.log.message(dim(`  Worker: ${workerModel}`));
+  p.log.message(dim(`  Lite: ${liteModel}`));
 
   p.log.step("Setting up OpenCode integration...");
 

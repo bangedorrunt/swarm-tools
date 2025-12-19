@@ -739,7 +739,7 @@ export const swarm_subtask_prompt = tool({
  */
 export const swarm_spawn_subtask = tool({
   description:
-    "Prepare a subtask for spawning. Returns prompt with Agent Mail/hive tracking instructions. IMPORTANT: Pass project_path for swarmmail_init.",
+    "Prepare a subtask for spawning. Returns prompt with Agent Mail/hive tracking instructions. IMPORTANT: Pass project_path for swarmmail_init. Automatically selects appropriate model based on file types.",
   args: {
     bead_id: tool.schema.string().describe("Subtask bead ID"),
     epic_id: tool.schema.string().describe("Parent epic bead ID"),
@@ -769,6 +769,10 @@ export const swarm_spawn_subtask = tool({
       })
       .optional()
       .describe("Recovery context from checkpoint compaction"),
+    model: tool.schema
+      .string()
+      .optional()
+      .describe("Optional explicit model override (auto-selected if not provided)"),
   },
   async execute(args) {
     const prompt = formatSubtaskPromptV2({
@@ -782,6 +786,28 @@ export const swarm_spawn_subtask = tool({
       recovery_context: args.recovery_context,
     });
 
+    // Import selectWorkerModel at function scope to avoid circular dependencies
+    const { selectWorkerModel } = await import("./model-selection.js");
+    
+    // Create a mock subtask for model selection
+    const subtask = {
+      title: args.subtask_title,
+      description: args.subtask_description || "",
+      files: args.files,
+      estimated_effort: "medium" as const,
+      risks: [],
+      model: args.model,
+    };
+    
+    // Use placeholder config - actual config should be passed from coordinator
+    // For now, we use reasonable defaults
+    const config = {
+      primaryModel: "anthropic/claude-sonnet-4-5",
+      liteModel: "anthropic/claude-haiku-4-5",
+    };
+    
+    const selectedModel = selectWorkerModel(subtask, config);
+
     return JSON.stringify(
       {
         prompt,
@@ -790,6 +816,7 @@ export const swarm_spawn_subtask = tool({
         files: args.files,
         project_path: args.project_path,
         recovery_context: args.recovery_context,
+        recommended_model: selectedModel,
       },
       null,
       2,

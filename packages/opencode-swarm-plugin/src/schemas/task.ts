@@ -43,6 +43,11 @@ export const DecomposedSubtaskSchema = z.object({
   estimated_effort: EffortLevelSchema,
   /** Potential risks or complications (e.g., 'tight coupling', 'data migration required', 'breaking change') */
   risks: z.array(z.string()).optional().default([]),
+  /** 
+   * Optional explicit model override for this subtask.
+   * If not specified, model will be selected based on file types.
+   */
+  model: z.string().optional(),
 });
 export type DecomposedSubtask = z.infer<typeof DecomposedSubtaskSchema>;
 
