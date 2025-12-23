@@ -488,6 +488,78 @@ describe("formatResearcherPrompt", () => {
   });
 });
 
+describe("on-demand research section", () => {
+  test("includes ON-DEMAND RESEARCH section after Step 9", () => {
+    // Find Step 9 and the section after it
+    const step9Pos = SUBTASK_PROMPT_V2.indexOf("### Step 9:");
+    const swarmMailPos = SUBTASK_PROMPT_V2.indexOf("## [SWARM MAIL COMMUNICATION]");
+    
+    expect(step9Pos).toBeGreaterThan(0);
+    expect(swarmMailPos).toBeGreaterThan(step9Pos);
+    
+    // Extract the section between Step 9 and SWARM MAIL
+    const betweenSection = SUBTASK_PROMPT_V2.substring(step9Pos, swarmMailPos);
+    
+    expect(betweenSection).toContain("## [ON-DEMAND RESEARCH]");
+  });
+
+  test("research section instructs to check semantic-memory first", () => {
+    const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
+    expect(researchMatch).not.toBeNull();
+    if (!researchMatch) return;
+    
+    const researchContent = researchMatch[0];
+    expect(researchContent).toContain("semantic-memory_find");
+    expect(researchContent).toMatch(/check.*semantic-memory.*first/i);
+  });
+
+  test("research section includes swarm_spawn_researcher tool usage", () => {
+    const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
+    expect(researchMatch).not.toBeNull();
+    if (!researchMatch) return;
+    
+    const researchContent = researchMatch[0];
+    expect(researchContent).toContain("swarm_spawn_researcher");
+  });
+
+  test("research section lists specific research triggers", () => {
+    const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
+    expect(researchMatch).not.toBeNull();
+    if (!researchMatch) return;
+    
+    const researchContent = researchMatch[0];
+    
+    // Should list when TO research
+    expect(researchContent).toMatch(/triggers|when to research/i);
+    expect(researchContent).toMatch(/API.*works|breaking changes|outdated/i);
+  });
+
+  test("research section lists when NOT to research", () => {
+    const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
+    expect(researchMatch).not.toBeNull();
+    if (!researchMatch) return;
+    
+    const researchContent = researchMatch[0];
+    
+    // Should list when to SKIP research
+    expect(researchContent).toMatch(/don't research|skip research/i);
+    expect(researchContent).toMatch(/standard patterns|well-documented|obvious/i);
+  });
+
+  test("research section includes 3-step workflow", () => {
+    const researchMatch = SUBTASK_PROMPT_V2.match(/## \[ON-DEMAND RESEARCH\][\s\S]*?## \[SWARM MAIL/);
+    expect(researchMatch).not.toBeNull();
+    if (!researchMatch) return;
+    
+    const researchContent = researchMatch[0];
+    
+    // Should have numbered steps
+    expect(researchContent).toMatch(/1\.\s*.*Check semantic-memory/i);
+    expect(researchContent).toMatch(/2\.\s*.*spawn researcher/i);
+    expect(researchContent).toMatch(/3\.\s*.*wait.*continue/i);
+  });
+});
+
 describe("swarm_spawn_researcher tool", () => {
   test("returns JSON with prompt field", async () => {
     const { swarm_spawn_researcher } = await import("./swarm-prompts");

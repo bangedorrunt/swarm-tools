@@ -48,6 +48,7 @@ import { skillsTools, setSkillsProjectDirectory } from "./skills";
 import { mandateTools } from "./mandates";
 import { memoryTools } from "./memory-tools";
 import { observabilityTools } from "./observability-tools";
+import { researchTools } from "./swarm-research";
 import {
   guardrailOutput,
   DEFAULT_GUARDRAIL_CONFIG,
@@ -167,6 +168,7 @@ export const SwarmPlugin: Plugin = async (
       ...mandateTools,
       ...memoryTools,
       ...observabilityTools,
+      ...researchTools,
     },
 
     /**
@@ -681,3 +683,23 @@ export {
   type OperationResult,
 } from "./memory-tools";
 export type { Memory, SearchResult, SearchOptions } from "swarm-mail";
+
+/**
+ * Re-export swarm-research module
+ *
+ * Includes:
+ * - discoverDocTools - Discover available documentation tools
+ * - getInstalledVersions - Get installed package versions from lockfile
+ * - researchTools - Plugin tools for tool discovery and version detection
+ *
+ * Types:
+ * - DiscoveredTool - Tool discovery result interface
+ * - VersionInfo - Package version information
+ */
+export {
+  discoverDocTools,
+  getInstalledVersions,
+  researchTools,
+  type DiscoveredTool,
+  type VersionInfo,
+} from "./swarm-research";

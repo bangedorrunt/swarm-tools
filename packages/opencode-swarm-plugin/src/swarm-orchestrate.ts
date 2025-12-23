@@ -1994,6 +1994,188 @@ export const swarm_record_outcome = tool({
   },
 });
 
+// ============================================================================
+// Research Phase
+// ============================================================================
+
+/**
+ * Known technology patterns for extraction from task descriptions
+ * Maps common mentions to normalized package names
+ */
+const TECH_PATTERNS: Record<string, RegExp> = {
+  next: /next\.?js|nextjs/i,
+  react: /react(?!ive)/i,
+  zod: /zod/i,
+  typescript: /typescript|ts(?!\w)/i,
+  tailwind: /tailwind(?:css)?/i,
+  prisma: /prisma/i,
+  drizzle: /drizzle(?:-orm)?/i,
+  trpc: /trpc/i,
+  "react-query": /react-query|tanstack.*query/i,
+  axios: /axios/i,
+  "node-fetch": /node-fetch|fetch api/i,
+};
+
+/**
+ * Extract technology stack from task description
+ *
+ * Searches for common framework/library mentions and returns
+ * a deduplicated array of normalized names.
+ *
+ * @param task - Task description
+ * @returns Array of detected technology names (normalized, lowercase)
+ *
+ * @example
+ * ```typescript
+ * extractTechStack("Add Next.js API routes with Zod validation")
+ * // => ["next", "zod"]
+ * ```
+ */
+export function extractTechStack(task: string): string[] {
+  const detected = new Set<string>();
+
+  for (const [tech, pattern] of Object.entries(TECH_PATTERNS)) {
+    if (pattern.test(task)) {
+      detected.add(tech);
+    }
+  }
+
+  return Array.from(detected);
+}
+
+/**
+ * Research result from documentation discovery phase
+ */
+export interface ResearchResult {
+  /** Technologies identified and researched */
+  tech_stack: string[];
+  /** Summaries keyed by technology name */
+  summaries: Record<string, string>;
+  /** Semantic-memory IDs where research is stored */
+  memory_ids: string[];
+}
+
+/**
+ * Run research phase before task decomposition
+ *
+ * This is the INTEGRATION point that:
+ * 1. Analyzes task to identify technologies
+ * 2. Spawns researcher agents for each technology (parallel)
+ * 3. Waits for researchers to complete
+ * 4. Collects summaries from semantic-memory
+ * 5. Returns combined context for shared_context
+ *
+ * Flow:
+ * ```
+ * Task received
+ *   ↓
+ * extractTechStack(task) → ["next", "zod"]
+ *   ↓
+ * For each tech: swarm_spawn_researcher(tech_stack=[tech])
+ *   ↓
+ * Spawn Task agents in parallel
+ *   ↓
+ * Wait for all to complete
+ *   ↓
+ * Collect summaries from swarm mail
+ *   ↓
+ * Return ResearchResult → inject into shared_context
+ * ```
+ *
+ * @param task - Task description to analyze
+ * @param projectPath - Absolute path to project root
+ * @param options - Optional configuration
+ * @returns Research results with summaries and memory IDs
+ *
+ * @example
+ * ```typescript
+ * const result = await runResearchPhase(
+ *   "Add Next.js API routes with Zod validation",
+ *   "/path/to/project"
+ * );
+ * // result.tech_stack => ["next", "zod"]
+ * // result.summaries => { next: "...", zod: "..." }
+ * // Use result as shared_context for decomposition
+ * ```
+ */
+export async function runResearchPhase(
+  task: string,
+  projectPath: string,
+  options?: { checkUpgrades?: boolean }
+): Promise<ResearchResult> {
+  // Step 1: Extract technologies from task description
+  const techStack = extractTechStack(task);
+
+  // Early return if no technologies detected
+  if (techStack.length === 0) {
+    return {
+      tech_stack: [],
+      summaries: {},
+      memory_ids: [],
+    };
+  }
+
+  // Step 2: For each technology, spawn a researcher
+  // TODO: Implement researcher spawning using swarm_spawn_researcher
+  // and Task tool. This requires coordination logic that will be
+  // added in a future iteration.
+
+  // For now, return empty summaries (GREEN phase - make tests pass)
+  // The full implementation will spawn researchers in parallel and
+  // collect their findings.
+
+  return {
+    tech_stack: techStack,
+    summaries: {},
+    memory_ids: [],
+  };
+}
+
+/**
+ * Plugin tool for running research phase
+ *
+ * Exposes research phase as a tool for manual triggering or
+ * integration into orchestration flows.
+ */
+export const swarm_research_phase = tool({
+  description:
+    "Run research phase to gather documentation for detected technologies. Returns summaries for injection into shared_context.",
+  args: {
+    task: tool.schema.string().min(1).describe("Task description to analyze"),
+    project_path: tool.schema
+      .string()
+      .describe("Absolute path to project root"),
+    check_upgrades: tool.schema
+      .boolean()
+      .optional()
+      .describe(
+        "Compare installed vs latest versions (default: false)"
+      ),
+  },
+  async execute(args) {
+    const result = await runResearchPhase(args.task, args.project_path, {
+      checkUpgrades: args.check_upgrades,
+    });
+
+    return JSON.stringify(
+      {
+        tech_stack: result.tech_stack,
+        summaries: result.summaries,
+        memory_ids: result.memory_ids,
+        summary: {
+          technologies_detected: result.tech_stack.length,
+          summaries_collected: Object.keys(result.summaries).length,
+          memories_stored: result.memory_ids.length,
+        },
+        usage_hint:
+          "Inject summaries into shared_context for task decomposition. Each technology has documentation in semantic-memory.",
+      },
+      null,
+      2
+    );
+  },
+});
+
 /**
  * Record an error during subtask execution
  *
@@ -2758,6 +2940,7 @@ export const orchestrateTools = {
   swarm_broadcast,
   swarm_complete,
   swarm_record_outcome,
+  swarm_research_phase,
   swarm_accumulate_error,
   swarm_get_error_context,
   swarm_resolve_error,

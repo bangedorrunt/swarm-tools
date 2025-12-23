@@ -464,6 +464,29 @@ swarm_complete(
 
 **DO NOT manually close the cell with hive_close.** Use swarm_complete.
 
+## [ON-DEMAND RESEARCH]
+
+If you encounter unknown API behavior or version-specific issues:
+
+1. **Check semantic-memory first:**
+   \`semantic-memory_find(query="<library> <version> <topic>", limit=3, expand=true)\`
+
+2. **If not found, spawn researcher:**
+   \`swarm_spawn_researcher(research_id="{bead_id}-research", epic_id="{epic_id}", tech_stack=["<library>"], project_path="{project_path}")\`
+   Then spawn with Task tool: \`Task(subagent_type="swarm/researcher", prompt="<from above>")\`
+
+3. **Wait for research, then continue**
+
+**Research triggers:**
+- "I'm not sure how this API works in version X"
+- "This might have breaking changes"
+- "The docs I remember might be outdated"
+
+**Don't research:**
+- Standard patterns you're confident about
+- Well-documented, stable APIs
+- Obvious implementations
+
 ## [SWARM MAIL COMMUNICATION]
 
 ### Check Inbox Regularly

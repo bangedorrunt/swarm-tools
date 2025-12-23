@@ -16,20 +16,23 @@ export * from "./swarm-strategies";
 export * from "./swarm-decompose";
 export * from "./swarm-prompts";
 export * from "./swarm-orchestrate";
+export * from "./swarm-research";
 
 // Import tools from each module
-import { strategyTools } from "./swarm-strategies";
 import { decomposeTools } from "./swarm-decompose";
-import { promptTools } from "./swarm-prompts";
 import { orchestrateTools } from "./swarm-orchestrate";
+import { promptTools } from "./swarm-prompts";
+import { researchTools } from "./swarm-research";
+import { strategyTools } from "./swarm-strategies";
 
 /**
  * Combined swarm tools for plugin registration.
- * Includes all tools from strategy, decompose, prompt, and orchestrate modules.
+ * Includes all tools from strategy, decompose, prompt, orchestrate, and research modules.
  */
 export const swarmTools = {
   ...strategyTools,
   ...decomposeTools,
   ...promptTools,
   ...orchestrateTools,
+  ...researchTools,
 };
