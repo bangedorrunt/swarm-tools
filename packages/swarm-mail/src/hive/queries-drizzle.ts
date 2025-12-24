@@ -55,9 +55,9 @@ export async function resolvePartialIdDrizzle(
 ): Promise<string | null> {
   const db = getHiveDrizzle(await adapter.getDatabase());
 
-  // Use LIKE with specific pattern for hash segment
-  // Pattern: %-{partialHash}%-% matches hash portion (second segment)
-  const pattern = `%-${partialHash}%-%`;
+  // Use LIKE to match ANY substring of the cell ID
+  // Pattern: %{partialHash}% matches project name, hash, OR timestamp+random segments
+  const pattern = `%${partialHash}%`;
   
   const results = await db
     .select()

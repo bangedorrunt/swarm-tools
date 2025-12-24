@@ -638,6 +638,57 @@ describe("beads/queries", () => {
 
       expect(result).toBe(null);
     });
+
+    test("returns full ID when given timestamp+random segment (end of ID)", async () => {
+      const cell = await beads.createCell(projectKey, {
+        title: "Test task",
+        type: "task",
+        priority: 2,
+      });
+
+      // Cell ID format: {prefix}-{hash}-{timestamp}{random}
+      // Example: opencode-swarm-monorepo-lf2p4u-mjkmdat26vq
+      // The last segment after the final dash is timestamp+random
+      const parts = cell.id.split("-");
+      const timestampRandom = parts[parts.length - 1]; // e.g., "mjkmdat26vq"
+
+      const { resolvePartialId } = await import("./queries.js");
+      const result = await resolvePartialId(beads, projectKey, timestampRandom);
+
+      expect(result).toBe(cell.id);
+    });
+
+    test("returns full ID when given partial timestamp+random segment", async () => {
+      const cell = await beads.createCell(projectKey, {
+        title: "Test task",
+        type: "task",
+        priority: 2,
+      });
+
+      const parts = cell.id.split("-");
+      const timestampRandom = parts[parts.length - 1];
+      const partialTimestamp = timestampRandom.slice(0, 5); // first 5 chars
+
+      const { resolvePartialId } = await import("./queries.js");
+      const result = await resolvePartialId(beads, projectKey, partialTimestamp);
+
+      expect(result).toBe(cell.id);
+    });
+
+    test("returns full ID when given any unique substring of the ID", async () => {
+      const cell = await beads.createCell(projectKey, {
+        title: "Test task",
+        type: "task",
+        priority: 2,
+      });
+
+      // Should match any unique substring
+      const { resolvePartialId } = await import("./queries.js");
+      
+      // Match by full ID
+      const result1 = await resolvePartialId(beads, projectKey, cell.id);
+      expect(result1).toBe(cell.id);
+    });
   });
 
   describe("getStatistics", () => {
