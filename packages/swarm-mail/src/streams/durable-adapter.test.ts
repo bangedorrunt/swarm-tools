@@ -132,8 +132,8 @@ describe("DurableStreamAdapter", () => {
         }),
       );
 
-      // Give it a moment to process
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Give it a moment to process (polling interval is 100ms)
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       expect(receivedEvents.length).toBeGreaterThan(0);
       const lastEvent = receivedEvents[receivedEvents.length - 1];

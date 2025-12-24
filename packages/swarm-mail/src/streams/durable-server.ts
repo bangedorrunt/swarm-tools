@@ -30,10 +30,12 @@ type BunServer = Server<undefined>;
  * Configuration for the Durable Stream HTTP server
  */
 export interface DurableStreamServerConfig {
-  /** Adapter for reading events */
+  /** Adapter for reading events (single project) */
   adapter: DurableStreamAdapter;
   /** Port to listen on (default 4483 - HIVE on phone keypad) */
   port?: number;
+  /** Optional project key (for URL matching, defaults to "*" = any) */
+  projectKey?: string;
 }
 
 /**
@@ -62,7 +64,7 @@ export interface DurableStreamServer {
 export function createDurableStreamServer(
   config: DurableStreamServerConfig,
 ): DurableStreamServer {
-  const { adapter, port = 4483 } = config;
+  const { adapter, port = 4483, projectKey: configProjectKey } = config;
 
   let bunServer: BunServer | null = null;
   const subscriptions = new Map<
@@ -80,6 +82,7 @@ export function createDurableStreamServer(
 
     bunServer = Bun.serve({
       port,
+      idleTimeout: 120, // 2 minutes for SSE connections
       async fetch(req: Request) {
         const url = new URL(req.url);
 
@@ -89,7 +92,12 @@ export function createDurableStreamServer(
           return new Response("Not Found", { status: 404 });
         }
 
-        const projectKey = decodeURIComponent(match[1]);
+        const requestedProjectKey = decodeURIComponent(match[1]);
+
+        // If server was configured with a specific projectKey, verify it matches
+        if (configProjectKey && configProjectKey !== requestedProjectKey) {
+          return new Response("Project not found", { status: 404 });
+        }
 
         // Parse query params
         const offsetParam = url.searchParams.get("offset");
@@ -121,6 +129,9 @@ export function createDurableStreamServer(
           async start(controller) {
             const encoder = new TextEncoder();
 
+            // Send SSE comment to flush headers and establish connection
+            controller.enqueue(encoder.encode(": connected\n\n"));
+
             // Send existing events first
             const existingEvents = await adapter.read(offset, limit);
             for (const event of existingEvents) {
@@ -128,20 +139,23 @@ export function createDurableStreamServer(
               controller.enqueue(encoder.encode(sse));
             }
 
-            // Subscribe to new events
+            // Subscribe to new events, passing offset to avoid async race
             const subscriptionId = subscriptionCounter++;
-            const unsubscribe = adapter.subscribe((event: StreamEvent) => {
-              // Only send events after our offset
-              if (event.offset > offset) {
-                try {
-                  const sse = `data: ${JSON.stringify(event)}\n\n`;
-                  controller.enqueue(encoder.encode(sse));
-                } catch (error) {
-                  // Client disconnected, will be cleaned up in cancel()
-                  console.error("Error sending event:", error);
+            const unsubscribe = adapter.subscribe(
+              (event: StreamEvent) => {
+                // Only send events after our offset (adapter filters too, but double-check)
+                if (event.offset > offset) {
+                  try {
+                    const sse = `data: ${JSON.stringify(event)}\n\n`;
+                    controller.enqueue(encoder.encode(sse));
+                  } catch (error) {
+                    // Client disconnected, will be cleaned up in cancel()
+                    console.error("Error sending event:", error);
+                  }
                 }
-              }
-            });
+              },
+              offset, // Pass offset to avoid async initialization race
+            );
 
             subscriptions.set(subscriptionId, { unsubscribe, controller });
 

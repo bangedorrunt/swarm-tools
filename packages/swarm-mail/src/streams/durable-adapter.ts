@@ -59,9 +59,10 @@ export interface DurableStreamAdapter {
    * Only delivers events that arrive AFTER subscription starts.
    * 
    * @param callback - Called with each new event
+   * @param startOffset - Optional offset to start from (avoids async race)
    * @returns Unsubscribe function
    */
-  subscribe(callback: (event: StreamEvent) => void): () => void;
+  subscribe(callback: (event: StreamEvent) => void, startOffset?: number): () => void;
 }
 
 /**
@@ -95,15 +96,11 @@ export function createDurableStreamAdapter(
   return {
     async read(offset: number, limit: number): Promise<StreamEvent[]> {
       // Use the SwarmMailAdapter's readEvents method
-      // Pass undefined for projectPath since we specify projectKey in options
-      const events = await swarmMail.readEvents(
-        {
-          projectKey,
-          afterSequence: offset,
-          limit,
-        },
-        undefined,
-      );
+      const events = await swarmMail.readEvents({
+        projectKey,
+        afterSequence: offset,
+        limit,
+      });
 
       // Convert to StreamEvent format
       return events.map((event) => ({
@@ -115,21 +112,26 @@ export function createDurableStreamAdapter(
 
     async head(): Promise<number> {
       // Use the SwarmMailAdapter's getLatestSequence method
-      return await swarmMail.getLatestSequence(projectKey, undefined);
+      return await swarmMail.getLatestSequence(projectKey);
     },
 
-    subscribe(callback: (event: StreamEvent) => void): () => void {
-      let lastSequence = 0;
+    subscribe(callback: (event: StreamEvent) => void, startOffset?: number): () => void {
+      let lastSequence = startOffset ?? 0;
       let isActive = true;
+      let initialized = startOffset !== undefined;
 
       // Initialize lastSequence to current head to avoid replaying historical events
-      (async () => {
-        lastSequence = await swarmMail.getLatestSequence(projectKey);
-      })();
+      // (only if startOffset not provided)
+      if (!initialized) {
+        (async () => {
+          lastSequence = await swarmMail.getLatestSequence(projectKey);
+          initialized = true;
+        })();
+      }
 
       // Poll every 100ms for new events
       const pollInterval = setInterval(async () => {
-        if (!isActive) return;
+        if (!isActive || !initialized) return;
 
         try {
           // Read events after lastSequence
