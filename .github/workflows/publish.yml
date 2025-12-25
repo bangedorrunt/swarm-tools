@@ -27,7 +27,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build
-        run: bun turbo build --filter='!@swarmtools/web'
+        run: bun turbo build --filter='!@swarmtools/web' --filter='!swarm-dashboard'
 
       - name: Check for changesets
         id: changesets
