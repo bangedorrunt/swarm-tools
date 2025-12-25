@@ -765,6 +765,40 @@ export const hive_create_epic = tool({
             error,
           );
         }
+
+        // Capture decomposition_complete event for eval scoring
+        try {
+          const { captureCoordinatorEvent } = await import("./eval-capture.js");
+          
+          // Build files_per_subtask map (indexed by subtask index)
+          const filesPerSubtask: Record<number, string[]> = {};
+          validated.subtasks.forEach((subtask, index) => {
+            if (subtask.files && subtask.files.length > 0) {
+              filesPerSubtask[index] = subtask.files;
+            }
+          });
+
+          captureCoordinatorEvent({
+            session_id: ctx.sessionID || "unknown",
+            epic_id: epic.id,
+            timestamp: new Date().toISOString(),
+            event_type: "DECISION",
+            decision_type: "decomposition_complete",
+            payload: {
+              subtask_count: validated.subtasks.length,
+              strategy_used: args.strategy || "feature-based",
+              files_per_subtask: filesPerSubtask,
+              epic_title: validated.epic_title,
+              task: args.task,
+            },
+          });
+        } catch (error) {
+          // Non-fatal - log and continue
+          console.warn(
+            "[hive_create_epic] Failed to capture decomposition_complete event:",
+            error,
+          );
+        }
       }
 
       // Sync cells to JSONL so spawned workers can see them immediately

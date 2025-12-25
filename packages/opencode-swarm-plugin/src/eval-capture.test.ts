@@ -13,7 +13,7 @@ import {
   captureCoordinatorEvent,
   captureCompactionEvent,
   saveSession,
-} from "./eval-capture.js";
+} from "./eval-capture.ts";
 
 describe("CoordinatorEvent schemas", () => {
   describe("DECISION events", () => {
@@ -77,6 +77,110 @@ describe("CoordinatorEvent schemas", () => {
         payload: {
           subtask_count: 3,
           strategy: "feature-based",
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates researcher_spawned event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "researcher_spawned",
+        payload: {
+          researcher_id: "BlueLake",
+          research_topic: "Next.js Cache Components",
+          tools_used: ["pdf-brain", "context7"],
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates skill_loaded event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "skill_loaded",
+        payload: {
+          skill_name: "testing-patterns",
+          context: "Adding tests to legacy code",
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates inbox_checked event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "inbox_checked",
+        payload: {
+          message_count: 3,
+          urgent_count: 1,
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates blocker_resolved event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "blocker_resolved",
+        payload: {
+          worker_id: "GreenStorm",
+          subtask_id: "bd-123.2",
+          blocker_type: "dependency",
+          resolution: "Unblocked via coordinator action",
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates scope_change_approved event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "scope_change_approved",
+        payload: {
+          worker_id: "BlueLake",
+          subtask_id: "bd-123.1",
+          original_scope: "Add auth service",
+          new_scope: "Add auth service + email validation",
+          estimated_time_add: 900000, // 15 min in ms
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates scope_change_rejected event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "DECISION",
+        decision_type: "scope_change_rejected",
+        payload: {
+          worker_id: "BlueLake",
+          subtask_id: "bd-123.1",
+          requested_scope: "Add auth service + OAuth + SSO",
+          rejection_reason: "Too large for single subtask",
         },
       };
 
@@ -210,6 +314,25 @@ describe("CoordinatorEvent schemas", () => {
           success: true,
           total_duration_ms: 180000,
           subtasks_completed: 3,
+        },
+      };
+
+      expect(() => CoordinatorEventSchema.parse(event)).not.toThrow();
+    });
+
+    test("validates blocker_detected event", () => {
+      const event: CoordinatorEvent = {
+        session_id: "test-session",
+        epic_id: "bd-123",
+        timestamp: new Date().toISOString(),
+        event_type: "OUTCOME",
+        outcome_type: "blocker_detected",
+        payload: {
+          worker_id: "GreenStorm",
+          subtask_id: "bd-123.2",
+          blocker_type: "dependency",
+          blocker_description: "Waiting for database schema from bd-123.1",
+          reported_at: new Date().toISOString(),
         },
       };
 
@@ -808,5 +931,85 @@ describe("captureCompactionEvent", () => {
     expect(capturedEvents[2].compaction_type).toBe("context_injected");
     expect(capturedEvents[3].compaction_type).toBe("resumption_started");
     expect(capturedEvents[4].compaction_type).toBe("tool_call_tracked");
+  });
+});
+
+describe("hive_create_epic integration - decomposition_complete event", () => {
+  let sessionDir: string;
+  let sessionId: string;
+  const testProjectPath = "/tmp/test-epic-decomposition";
+
+  beforeEach(() => {
+    sessionDir = path.join(os.homedir(), ".config", "swarm-tools", "sessions");
+    sessionId = `test-epic-${Date.now()}`;
+  });
+
+  afterEach(() => {
+    // Clean up test session file
+    const sessionPath = path.join(sessionDir, `${sessionId}.jsonl`);
+    if (fs.existsSync(sessionPath)) {
+      fs.unlinkSync(sessionPath);
+    }
+  });
+
+  test("captures decomposition_complete event after hive_create_epic succeeds", async () => {
+    // Test the event capture by calling captureCoordinatorEvent directly
+    // Testing hive_create_epic directly would require full plugin infrastructure
+    
+    // GIVEN: We simulate what hive_create_epic does after epic creation
+    const epicId = `test-epic-${Date.now()}`;
+    const subtasks = [
+      { title: "Subtask 1", files: ["src/a.ts"] },
+      { title: "Subtask 2", files: ["src/b.ts", "src/c.ts"] },
+      { title: "Subtask 3", files: ["src/d.ts"] },
+    ];
+    
+    // Build files_per_subtask map (same logic as hive.ts)
+    const filesPerSubtask: Record<number, string[]> = {};
+    subtasks.forEach((subtask, index) => {
+      if (subtask.files && subtask.files.length > 0) {
+        filesPerSubtask[index] = subtask.files;
+      }
+    });
+
+    // WHEN: decomposition_complete event is captured
+    captureCoordinatorEvent({
+      session_id: sessionId,
+      epic_id: epicId,
+      timestamp: new Date().toISOString(),
+      event_type: "DECISION",
+      decision_type: "decomposition_complete",
+      payload: {
+        subtask_count: subtasks.length,
+        strategy_used: "file-based",
+        files_per_subtask: filesPerSubtask,
+        epic_title: "Test Epic for Event Capture",
+        task: "Original task description",
+      },
+    });
+
+    // THEN: Event should be written to session file
+    const sessionPath = path.join(sessionDir, `${sessionId}.jsonl`);
+    expect(fs.existsSync(sessionPath)).toBe(true);
+
+    const content = fs.readFileSync(sessionPath, "utf-8");
+    const lines = content.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(1);
+
+    // Verify event structure
+    const event = JSON.parse(lines[0]);
+    expect(event.session_id).toBe(sessionId);
+    expect(event.epic_id).toBe(epicId);
+    expect(event.event_type).toBe("DECISION");
+    expect(event.decision_type).toBe("decomposition_complete");
+    expect(event.payload.subtask_count).toBe(3);
+    expect(event.payload.strategy_used).toBe("file-based");
+    expect(event.payload.files_per_subtask).toEqual({
+      0: ["src/a.ts"],
+      1: ["src/b.ts", "src/c.ts"],
+      2: ["src/d.ts"],
+    });
+    expect(event.payload.epic_title).toBe("Test Epic for Event Capture");
+    expect(event.payload.task).toBe("Original task description");
   });
 });

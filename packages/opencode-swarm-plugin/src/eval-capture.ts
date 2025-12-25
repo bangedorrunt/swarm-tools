@@ -13,9 +13,9 @@
  * 6. Session capture: full coordinator session to ~/.config/swarm-tools/sessions/
  *
  * Event types:
- * - DECISION: strategy_selected, worker_spawned, review_completed, decomposition_complete
+ * - DECISION: strategy_selected, worker_spawned, review_completed, decomposition_complete, researcher_spawned, skill_loaded, inbox_checked, blocker_resolved, scope_change_approved, scope_change_rejected
  * - VIOLATION: coordinator_edited_file, coordinator_ran_tests, coordinator_reserved_files, no_worker_spawned
- * - OUTCOME: subtask_success, subtask_retry, subtask_failed, epic_complete
+ * - OUTCOME: subtask_success, subtask_retry, subtask_failed, epic_complete, blocker_detected
  * - COMPACTION: detection_complete, prompt_generated, context_injected, resumption_started, tool_call_tracked
  *
  * @module eval-capture
@@ -143,6 +143,12 @@ export const CoordinatorEventSchema = z.discriminatedUnion("event_type", [
       "worker_spawned",
       "review_completed",
       "decomposition_complete",
+      "researcher_spawned",
+      "skill_loaded",
+      "inbox_checked",
+      "blocker_resolved",
+      "scope_change_approved",
+      "scope_change_rejected",
     ]),
     payload: z.any(),
   }),
@@ -171,6 +177,7 @@ export const CoordinatorEventSchema = z.discriminatedUnion("event_type", [
       "subtask_retry",
       "subtask_failed",
       "epic_complete",
+      "blocker_detected",
     ]),
     payload: z.any(),
   }),
@@ -682,6 +689,191 @@ export function captureCompactionEvent(params: {
     event_type: "COMPACTION",
     compaction_type: params.compaction_type,
     payload: params.payload,
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture a researcher spawned event
+ *
+ * Called when coordinator spawns a swarm-researcher to handle unfamiliar technology
+ * or gather documentation before decomposition.
+ */
+export function captureResearcherSpawned(params: {
+  session_id: string;
+  epic_id: string;
+  researcher_id: string;
+  research_topic: string;
+  tools_used?: string[];
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "DECISION",
+    decision_type: "researcher_spawned",
+    payload: {
+      researcher_id: params.researcher_id,
+      research_topic: params.research_topic,
+      tools_used: params.tools_used || [],
+    },
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture a skill loaded event
+ *
+ * Called when coordinator loads domain knowledge via skills_use().
+ */
+export function captureSkillLoaded(params: {
+  session_id: string;
+  epic_id: string;
+  skill_name: string;
+  context?: string;
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "DECISION",
+    decision_type: "skill_loaded",
+    payload: {
+      skill_name: params.skill_name,
+      context: params.context,
+    },
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture an inbox checked event
+ *
+ * Called when coordinator checks swarmmail inbox for worker messages.
+ * Tracks monitoring frequency and responsiveness.
+ */
+export function captureInboxChecked(params: {
+  session_id: string;
+  epic_id: string;
+  message_count: number;
+  urgent_count: number;
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "DECISION",
+    decision_type: "inbox_checked",
+    payload: {
+      message_count: params.message_count,
+      urgent_count: params.urgent_count,
+    },
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture a blocker resolved event
+ *
+ * Called when coordinator successfully unblocks a worker.
+ */
+export function captureBlockerResolved(params: {
+  session_id: string;
+  epic_id: string;
+  worker_id: string;
+  subtask_id: string;
+  blocker_type: string;
+  resolution: string;
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "DECISION",
+    decision_type: "blocker_resolved",
+    payload: {
+      worker_id: params.worker_id,
+      subtask_id: params.subtask_id,
+      blocker_type: params.blocker_type,
+      resolution: params.resolution,
+    },
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture a scope change decision event
+ *
+ * Called when coordinator approves or rejects a worker's scope expansion request.
+ */
+export function captureScopeChangeDecision(params: {
+  session_id: string;
+  epic_id: string;
+  worker_id: string;
+  subtask_id: string;
+  approved: boolean;
+  original_scope?: string;
+  new_scope?: string;
+  requested_scope?: string;
+  rejection_reason?: string;
+  estimated_time_add?: number;
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "DECISION",
+    decision_type: params.approved ? "scope_change_approved" : "scope_change_rejected",
+    payload: params.approved
+      ? {
+          worker_id: params.worker_id,
+          subtask_id: params.subtask_id,
+          original_scope: params.original_scope,
+          new_scope: params.new_scope,
+          estimated_time_add: params.estimated_time_add,
+        }
+      : {
+          worker_id: params.worker_id,
+          subtask_id: params.subtask_id,
+          requested_scope: params.requested_scope,
+          rejection_reason: params.rejection_reason,
+        },
+  };
+
+  captureCoordinatorEvent(event);
+}
+
+/**
+ * Capture a blocker detected event
+ *
+ * Called when a worker reports being blocked (OUTCOME event, not DECISION).
+ */
+export function captureBlockerDetected(params: {
+  session_id: string;
+  epic_id: string;
+  worker_id: string;
+  subtask_id: string;
+  blocker_type: string;
+  blocker_description: string;
+}): void {
+  const event: CoordinatorEvent = {
+    session_id: params.session_id,
+    epic_id: params.epic_id,
+    timestamp: new Date().toISOString(),
+    event_type: "OUTCOME",
+    outcome_type: "blocker_detected",
+    payload: {
+      worker_id: params.worker_id,
+      subtask_id: params.subtask_id,
+      blocker_type: params.blocker_type,
+      blocker_description: params.blocker_description,
+      reported_at: new Date().toISOString(),
+    },
   };
 
   captureCoordinatorEvent(event);

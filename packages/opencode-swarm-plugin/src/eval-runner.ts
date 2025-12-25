@@ -1,0 +1,356 @@
+/**
+ * Programmatic Evalite Runner
+ *
+ * Provides a type-safe API for running evalite evals programmatically.
+ * Wraps evalite's runEvalite function with structured result parsing.
+ *
+ * @module eval-runner
+ */
+
+import { tool } from "@opencode-ai/plugin";
+import { runEvalite } from "evalite/runner";
+import { createInMemoryStorage } from "evalite/in-memory-storage";
+import type { Evalite } from "evalite/types";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+/**
+ * Options for running evals programmatically
+ */
+export interface RunEvalsOptions {
+  /**
+   * Working directory containing eval files (defaults to process.cwd())
+   */
+  cwd?: string;
+  
+  /**
+   * Optional filter to run specific eval suites (e.g., "coordinator", "compaction")
+   * Matches against eval file paths using substring matching
+   */
+  suiteFilter?: string;
+  
+  /**
+   * Minimum average score threshold (0-100)
+   * If average score falls below this, result.success will be false
+   */
+  scoreThreshold?: number;
+  
+  /**
+   * Optional path to write raw evalite JSON output
+   */
+  outputPath?: string;
+}
+
+/**
+ * Structured suite result with scores
+ */
+export interface SuiteResult {
+  /** Suite name from evalite() call */
+  name: string;
+  
+  /** Absolute path to eval file */
+  filepath: string;
+  
+  /** Suite status: success, fail, or running */
+  status: "success" | "fail" | "running";
+  
+  /** Total duration in milliseconds */
+  duration: number;
+  
+  /** Average score across all evals in suite (0-1 scale) */
+  averageScore: number;
+  
+  /** Number of evals in this suite */
+  evalCount: number;
+  
+  /** Individual eval results (optional, can be large) */
+  evals?: Array<{
+    input: unknown;
+    output: unknown;
+    expected?: unknown;
+    scores: Array<{
+      name: string;
+      score: number;
+      description?: string;
+    }>;
+  }>;
+}
+
+/**
+ * Structured result from running evals
+ */
+export interface RunEvalsResult {
+  /** Whether the run succeeded (all evals passed threshold) */
+  success: boolean;
+  
+  /** Total number of suites executed */
+  totalSuites: number;
+  
+  /** Total number of individual evals executed */
+  totalEvals: number;
+  
+  /** Average score across all suites (0-1 scale) */
+  averageScore: number;
+  
+  /** Individual suite results */
+  suites: SuiteResult[];
+  
+  /** Error message if run failed */
+  error?: string;
+}
+
+/**
+ * Run evalite evals programmatically
+ *
+ * @param options - Configuration for eval run
+ * @returns Structured results with scores per suite
+ *
+ * @example
+ * ```typescript
+ * // Run all evals
+ * const result = await runEvals({ cwd: "/path/to/project" });
+ * console.log(`Average score: ${result.averageScore}`);
+ *
+ * // Run specific suite
+ * const coordResult = await runEvals({
+ *   cwd: "/path/to/project",
+ *   suiteFilter: "coordinator"
+ * });
+ *
+ * // Enforce score threshold
+ * const gatedResult = await runEvals({
+ *   cwd: "/path/to/project",
+ *   scoreThreshold: 80
+ * });
+ * if (!gatedResult.success) {
+ *   throw new Error(`Evals failed threshold: ${gatedResult.averageScore}`);
+ * }
+ * ```
+ */
+export async function runEvals(
+  options: RunEvalsOptions = {}
+): Promise<RunEvalsResult> {
+  const {
+    cwd = process.cwd(),
+    suiteFilter,
+    scoreThreshold,
+    outputPath: userOutputPath,
+  } = options;
+
+  try {
+    // Resolve to project root (evals are in evals/ relative to project root)
+    // If cwd is src/, go up one level
+    const projectRoot = cwd.endsWith("src") ? path.dirname(cwd) : cwd;
+    const evalsDir = path.join(projectRoot, "evals");
+    let evalPath: string | undefined;
+
+    if (suiteFilter) {
+      // Find matching eval files
+      try {
+        const files = await fs.readdir(evalsDir);
+        const matchingFiles = files.filter((f) =>
+          f.toLowerCase().includes(suiteFilter.toLowerCase())
+        );
+
+        if (matchingFiles.length === 0) {
+          // No matches - return empty result (not an error)
+          return {
+            success: true,
+            totalSuites: 0,
+            totalEvals: 0,
+            averageScore: 0,
+            suites: [],
+          };
+        }
+
+        // Use first matching file (evalite will discover all via vitest)
+        evalPath = path.join(evalsDir, matchingFiles[0]);
+      } catch (err) {
+        // Directory doesn't exist or can't be read
+        return {
+          success: false,
+          totalSuites: 0,
+          totalEvals: 0,
+          averageScore: 0,
+          suites: [],
+          error: `Failed to read evals directory: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    } else {
+      // No filter - run all evals in evals/
+      evalPath = evalsDir;
+    }
+
+    // Use temporary output path if user didn't provide one
+    const outputPath =
+      userOutputPath || path.join(projectRoot, `.evalite-results-${Date.now()}.json`);
+    const isTemporaryOutput = !userOutputPath;
+
+    // Run evalite programmatically
+    const storage = createInMemoryStorage();
+    
+    await runEvalite({
+      path: evalPath, // undefined = run all
+      cwd: projectRoot, // Use project root as working directory
+      mode: "run-once",
+      scoreThreshold,
+      outputPath,
+      hideTable: true, // Suppress terminal output
+      storage,
+      disableServer: true, // No UI server needed
+    });
+
+    // Parse output file for structured results
+    let outputJson: string;
+    try {
+      outputJson = await fs.readFile(outputPath, "utf-8");
+    } catch (err) {
+      // Output file wasn't written - evalite crashed or no tests ran
+      return {
+        success: false,
+        totalSuites: 0,
+        totalEvals: 0,
+        averageScore: 0,
+        suites: [],
+        error: `No results file generated: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const output: Evalite.Exported.Output = JSON.parse(outputJson);
+
+    // Clean up temporary output file
+    if (isTemporaryOutput) {
+      await fs.unlink(outputPath).catch(() => {
+        /* ignore cleanup errors */
+      });
+    }
+
+    // Transform to structured result
+    const suites: SuiteResult[] = output.suites.map((suite) => ({
+      name: suite.name,
+      filepath: suite.filepath,
+      status: suite.status,
+      duration: suite.duration,
+      averageScore: suite.averageScore,
+      evalCount: suite.evals.length,
+      // Include evals if user wants detailed results
+      evals: suite.evals.map((e) => ({
+        input: e.input,
+        output: e.output,
+        expected: e.expected,
+        scores: e.scores.map((s) => ({
+          name: s.name,
+          score: s.score,
+          description: s.description,
+        })),
+      })),
+    }));
+
+    // Calculate overall metrics
+    const totalEvals = suites.reduce((sum, s) => sum + s.evalCount, 0);
+    const averageScore =
+      suites.length > 0
+        ? suites.reduce((sum, s) => sum + s.averageScore, 0) / suites.length
+        : 0;
+
+    // Determine success based on threshold
+    const thresholdPassed =
+      scoreThreshold === undefined || averageScore * 100 >= scoreThreshold;
+
+    return {
+      success: thresholdPassed,
+      totalSuites: suites.length,
+      totalEvals,
+      averageScore,
+      suites,
+    };
+  } catch (error) {
+    // Return error result
+    return {
+      success: false,
+      totalSuites: 0,
+      totalEvals: 0,
+      averageScore: 0,
+      suites: [],
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error),
+    };
+  }
+}
+
+// ============================================================================
+// Plugin Tool
+// ============================================================================
+
+/**
+ * Plugin tool for running evals programmatically
+ */
+const eval_run = tool({
+  description: `Run evalite evals programmatically and get structured results with scores.
+
+Use this to:
+- Run all evals in evals/ directory
+- Filter by specific eval suite (e.g., "coordinator", "compaction")
+- Enforce score thresholds for quality gates
+- Get per-suite and per-eval scores
+
+Returns structured JSON with:
+- success: boolean (true if all tests passed threshold)
+- totalSuites: number of eval suites run
+- totalEvals: number of individual test cases
+- averageScore: 0-1 score across all suites
+- suites: array of suite results with scores
+
+Example usage:
+- Run all evals: eval_run()
+- Run coordinator evals: eval_run({ suiteFilter: "coordinator" })
+- Enforce 80% threshold: eval_run({ scoreThreshold: 80 })`,
+
+  args: {
+    suiteFilter: tool.schema
+      .string()
+      .optional()
+      .describe(
+        'Optional filter to run specific eval suite (e.g., "coordinator", "compaction"). Matches against eval file paths using substring matching.'
+      ),
+    scoreThreshold: tool.schema
+      .number()
+      .optional()
+      .describe(
+        "Optional minimum average score threshold (0-100). If average score falls below this, result.success will be false. Useful for CI quality gates."
+      ),
+    includeDetailedResults: tool.schema
+      .boolean()
+      .optional()
+      .describe(
+        "Include individual eval results with input/output/scores in response. Set to false (default) for summary only to save token usage."
+      ),
+  },
+
+  execute: async (args) => {
+    const result = await runEvals({
+      cwd: process.cwd(),
+      suiteFilter: args.suiteFilter as string | undefined,
+      scoreThreshold: args.scoreThreshold as number | undefined,
+    });
+
+    // Remove detailed evals if not requested (saves tokens)
+    const includeDetails = args.includeDetailedResults === true;
+    if (!includeDetails) {
+      for (const suite of result.suites) {
+        delete suite.evals;
+      }
+    }
+
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+/**
+ * All eval tools exported for registration
+ */
+export const evalTools = {
+  eval_run,
+} as const;

@@ -502,7 +502,16 @@ Updated ID generation
 - Include code examples if API changed
 - Mention backward compatibility explicitly
 - Make it scannable (headers, bullets, bold for key points)
-- **Pull a quote from pdf-brain** - Search for something thematically relevant and add it as an epigraph. Makes changelogs memorable and connects our work to the broader craft.
+
+**MANDATORY: Pull a quote from pdf-brain.** This is NOT optional:
+```bash
+pdf-brain_search(query="<thematic keyword from your change>", limit=5)
+```
+Add the quote as an epigraph. Makes changelogs memorable and connects our work to the broader craft. Examples:
+- Adding observability? Search "observability monitoring visibility"
+- Refactoring? Search "refactoring Fowler small steps"
+- Event sourcing? Search "event sourcing CQRS"
+- Testing? Search "Beck TDD red green"
 
 ### Ignored Packages
 

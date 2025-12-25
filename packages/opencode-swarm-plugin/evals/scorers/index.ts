@@ -1,5 +1,9 @@
 import { createScorer } from "evalite";
+import { generateText, gateway } from "ai";
+import type { GatewayModelId } from "ai";
 import type { CellTree } from "../../src/schemas/index.js";
+
+const JUDGE_MODEL: GatewayModelId = "anthropic/claude-haiku-4-5";
 
 /**
  * Custom scorers for evaluating swarm task decomposition quality

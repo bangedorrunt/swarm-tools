@@ -49,6 +49,7 @@ import { mandateTools } from "./mandates";
 import { memoryTools } from "./memory-tools";
 import { observabilityTools } from "./observability-tools";
 import { researchTools } from "./swarm-research";
+import { evalTools } from "./eval-runner";
 import {
   guardrailOutput,
   DEFAULT_GUARDRAIL_CONFIG,
@@ -175,6 +176,7 @@ const SwarmPlugin: Plugin = async (
       ...memoryTools,
       ...observabilityTools,
       ...researchTools,
+      ...evalTools,
     },
 
     /**

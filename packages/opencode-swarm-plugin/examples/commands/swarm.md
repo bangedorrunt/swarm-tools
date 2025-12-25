@@ -34,6 +34,77 @@ $ARGUMENTS
 /swarm --fast --to-main "quick fix"    # Fast mode + push to main
 ```
 
+## What Good Looks Like 🎯
+
+**Coordinators orchestrate, workers execute.** You're a conductor, not a performer.
+
+### ✅ GOOD Coordinator Behavior
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  COORDINATOR EXCELLENCE                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ✅ Spawned researcher for Next.js 16 Cache Components      │
+│     → Got condensed summary, stored full findings in        │
+│       semantic-memory for future agents                     │
+│                                                             │
+│  ✅ Loaded testing-patterns skill BEFORE spawning workers   │
+│     → Included skill recommendations in shared_context      │
+│     → Workers knew exactly which skills to use              │
+│                                                             │
+│  ✅ Checked swarmmail_inbox every 5 minutes                 │
+│     → Caught worker blocked on database schema              │
+│     → Unblocked by coordinating with upstream worker        │
+│                                                             │
+│  ✅ Delegated planning to swarm/planner subagent            │
+│     → Main context stayed clean (only received JSON)        │
+│     → Scaled to 7 workers without context exhaustion        │
+│                                                             │
+│  ✅ Workers reserved their OWN files                        │
+│     → Coordinator never called swarmmail_reserve            │
+│     → Conflict detection worked, no edit collisions         │
+│                                                             │
+│  ✅ Reviewed worker output with swarm_review                │
+│     → Sent specific feedback via swarm_review_feedback      │
+│     → Caught integration issue before merge                 │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### ❌ COMMON MISTAKES (Avoid These)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  COORDINATOR ANTI-PATTERNS                  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ❌ Called context7 directly → dumped 50KB of docs into     │
+│     main thread → context exhaustion before workers spawned │
+│                                                             │
+│  ❌ Skipped skill loading → workers didn't know about       │
+│     testing-patterns → reinvented dependency-breaking       │
+│     techniques already documented in skills                 │
+│                                                             │
+│  ❌ Never checked inbox → worker stuck for 15 minutes on    │
+│     blocker → silent failure, wasted time                   │
+│                                                             │
+│  ❌ Decomposed task inline in main thread → read 12 files,  │
+│     ran CASS queries, reasoned for 100 messages → burned    │
+│     50% of context budget BEFORE spawning workers           │
+│                                                             │
+│  ❌ Reserved files as coordinator → workers blocked trying  │
+│     to reserve same files → swarm stalled, manual cleanup   │
+│                                                             │
+│  ❌ Edited worker's code directly → no swarm_complete call  │
+│     → learning signals lost, reservations not released      │
+│                                                             │
+│  ❌ Closed cells manually when workers said "done"          │
+│     → Skipped swarm_review → shipped broken integration     │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## MANDATORY: Swarm Mail
 
 **ALL coordination MUST use `swarmmail_*` tools.** This is non-negotiable.
@@ -97,9 +168,11 @@ swarmmail_init(project_path="$PWD", task_description="Swarm: <task summary>")
 
 This registers you as the coordinator agent.
 
+**Event tracked:** `session_initialized`
+
 ### 2. Knowledge Gathering (MANDATORY)
 
-**Before decomposing, query ALL knowledge sources:**
+**Before decomposing, query these knowledge sources:**
 
 ```bash
 # Past learnings from this project
@@ -108,14 +181,11 @@ semantic-memory_find(query="<task keywords>", limit=5)
 # How similar tasks were solved before
 cass_search(query="<task description>", limit=5)
 
-# Design patterns and prior art
-pdf-brain_search(query="<domain concepts>", limit=5)
-
 # Available skills to inject into workers
 skills_list()
 ```
 
-**Load coordinator skills based on task type:**
+**Load coordinator skills based on task type (MANDATORY):**
 
 ```bash
 # For swarm coordination (ALWAYS load this)
@@ -131,12 +201,87 @@ skills_use(name="testing-patterns")
 skills_use(name="cli-builder")
 ```
 
-Synthesize findings into shared context for workers. Note:
+**Event tracked:** `skill_loaded` (for each skill)
 
-- Relevant patterns from pdf-brain
-- Similar past approaches from CASS
-- Project-specific learnings from semantic-memory
-- **Skills to recommend for each subtask** (critical for worker effectiveness)
+**✅ GOOD:**
+- Load skills_use(name="swarm-coordination") at start of every swarm
+- Load task-specific skills based on keywords in task description
+- Include skill recommendations in shared_context for workers
+
+**❌ BAD:**
+- Skip skill loading → workers reinvent patterns
+- Load skills inline during decomposition → burns context
+- Forget to mention skills in shared_context → workers don't know they exist
+
+Synthesize findings into shared context for workers.
+
+### 2.5. Research Phase (SPAWN RESEARCHER IF NEEDED - MANDATORY CHECK)
+
+**⚠️ Coordinators CANNOT call pdf-brain, context7, or webfetch directly.** These dump massive context into your expensive Sonnet thread. Instead, spawn a researcher.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              WHEN TO SPAWN A RESEARCHER                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ✅ SPAWN RESEARCHER WHEN:                                  │
+│  • Task involves unfamiliar framework/library               │
+│  • Need version-specific API docs (Next.js 16 vs 14)        │
+│  • Working with experimental/preview features               │
+│  • Need architectural guidance from pdf-brain               │
+│  • Want quotes from pdf-brain for changesets                │
+│                                                             │
+│  ❌ DON'T SPAWN WHEN:                                       │
+│  • Using well-known stable APIs                             │
+│  • Pure refactoring of existing code                        │
+│  • semantic-memory already has the answer                   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**How to spawn a researcher:**
+
+```bash
+Task(
+  subagent_type="swarm-researcher",
+  description="Research: <topic>",
+  prompt="Research <topic> for the swarm task '<task>'.
+
+Use these tools:
+- pdf-brain_search(query='<domain concepts>', limit=5) - software literature
+- context7_get-library-docs - library-specific docs
+- webfetch - official documentation sites
+
+Store full findings in semantic-memory for future agents.
+Return a 3-5 bullet summary for shared_context.
+If writing a changeset, include a thematic quote from pdf-brain."
+)
+```
+
+**Event tracked:** `researcher_spawned`
+
+**Researcher outputs:**
+- Full findings stored in semantic-memory (searchable forever)
+- Condensed summary returned for coordinator's shared_context
+- Quotes for changesets if requested
+
+**Example triggers:**
+| Task Contains | Spawn Researcher For |
+|---------------|----------------------|
+| "Next.js 16", "cache components" | Next.js 16 Cache Components API |
+| "Effect-TS", "Layer" | Effect-TS service patterns |
+| "event sourcing" | Event sourcing patterns from pdf-brain |
+| "OAuth", "PKCE" | OAuth 2.0 PKCE flow specifics |
+
+**✅ GOOD:**
+- Spawn researcher for Next.js 16 Cache Components → got API patterns, stored in semantic-memory
+- Researcher returned 3-bullet summary → added to shared_context → workers had key guidance
+- No context pollution in coordinator thread
+
+**❌ BAD:**
+- Called context7 directly → 50KB of Next.js docs dumped into main thread → context exhaustion
+- Skipped researcher "because task seemed simple" → workers hit undocumented API quirks → 30min debugging
+- Spawned researcher but didn't use the summary → wasted researcher's work
 
 ### 3. Create Feature Branch (unless --to-main)
 
@@ -272,6 +417,8 @@ Rules:
 - 3-7 cells per swarm
 - No file overlap between subtasks
 
+**Event tracked:** `decomposition_complete`
+
 ### 6. Spawn Agents (Workers Reserve Their Own Files)
 
 > **⚠️ CRITICAL: Coordinator NEVER reserves files.**
@@ -315,26 +462,124 @@ Then spawn:
 Task(subagent_type="swarm/worker", description="<bead-title>", prompt="<from swarm_spawn_subtask>")
 ```
 
-### 8. Monitor (unless --no-sync)
+**Event tracked:** `worker_spawned` (for each worker)
+
+**✅ GOOD:**
+- Spawned all 5 workers in single message → parallel execution
+- Included researcher findings in shared_context → workers had domain knowledge
+- Included skill recommendations → workers loaded testing-patterns before TDD work
+- Coordinator DID NOT reserve files → workers reserved their own → no conflicts
+
+**❌ BAD:**
+- Spawned workers one-by-one in separate messages → sequential, slow
+- Forgot to include researcher summary in shared_context → workers lacked API knowledge
+- Coordinator reserved files before spawning workers → workers blocked → manual cleanup
+- Skipped skill recommendations → workers reinvented patterns
+
+### 7. Monitor Inbox (MANDATORY - unless --no-sync)
+
+> **⚠️ CRITICAL: Active monitoring is NOT optional.**
+>
+> Check `swarmmail_inbox()` **every 5-10 minutes** during swarm execution.
+> Workers get blocked. Files conflict. Scope changes. You must intervene.
+
+**Monitoring pattern:**
 
 ```bash
-swarm_status(epic_id="<epic-id>", project_key="$PWD")
-swarmmail_inbox()  # Check for worker messages
+# Every 5-10 minutes while workers are active
+swarmmail_inbox()  # Check for worker messages (max 5, no bodies)
+
+# If urgent messages appear
 swarmmail_read_message(message_id=N)  # Read specific message
+
+# Check overall status
+swarm_status(epic_id="<epic-id>", project_key="$PWD")
 ```
+
+**Event tracked:** `inbox_checked` (each check)
 
 **Intervention triggers:**
 
-- Worker blocked >5 min → Check inbox, offer guidance
-- File conflict → Mediate, reassign files
-- Worker asking questions → Answer directly
-- Scope creep → Redirect, create new cell for extras
+- **Worker blocked >5 min** → Check inbox, offer guidance → **Event:** `blocker_resolved`
+- **File conflict** → Mediate, reassign files → **Event:** `file_conflict_mediated`
+- **Worker asking questions** → Answer directly
+- **Scope creep** → Redirect, create new cell for extras → **Event:** `scope_change_approved` or `scope_change_rejected`
 
 If incompatibilities spotted, broadcast:
 
 ```bash
 swarmmail_send(to=["*"], subject="Coordinator Update", body="<guidance>", importance="high", thread_id="<epic-id>")
 ```
+
+**✅ GOOD:**
+- Checked inbox every 5 minutes → caught worker blocked on database schema at 8min mark
+- Read message, coordinated with upstream worker → blocker resolved in 2min
+- Worker unblocked, continued work → minimal delay
+- Approved scope change request → created new cell for extra feature → **Event:** `scope_change_approved`
+
+**❌ BAD:**
+- Never checked inbox → worker stuck for 25 minutes waiting for coordinator
+- Silent failure → worker gave up, closed cell incomplete
+- Rejected scope change without creating follow-up cell → worker's valid concern lost → **Event:** `scope_change_rejected` (missing follow-up)
+
+**Minimum monitoring frequency:**
+- Check inbox **at least every 10 minutes** while workers active
+- Immediately after spawning workers (catch quick blockers)
+- After any worker completes (check for downstream dependencies)
+
+### 8. Review Worker Output (MANDATORY)
+
+> **⚠️ CRITICAL: Never skip review.**
+>
+> Workers say "done" doesn't mean "correct" or "integrated".
+> Use `swarm_review` to generate review prompt, then `swarm_review_feedback` to approve/reject.
+
+**Review workflow:**
+
+```bash
+# 1. Generate review prompt with epic context + diff
+swarm_review(
+  project_key="$PWD",
+  epic_id="<epic-id>",
+  task_id="<cell-id>",
+  files_touched=["src/auth.ts", "src/schema.ts"]
+)
+
+# 2. Review the output (check for integration, type safety, tests)
+
+# 3. Send feedback
+swarm_review_feedback(
+  project_key="$PWD",
+  task_id="<cell-id>",
+  worker_id="<agent-name>",
+  status="approved",  # or "needs_changes"
+  summary="LGTM - auth service integrates correctly with existing schema",
+  issues=""  # or JSON array of specific issues
+)
+```
+
+**Event tracked:** `review_completed` (for each review)
+
+**Review criteria:**
+- Does work fulfill subtask requirements?
+- Does it serve the overall epic goal?
+- Does it enable downstream tasks?
+- Type safety maintained?
+- Tests added/passing?
+- No obvious bugs or security issues?
+
+**3-Strike Rule:** After 3 review rejections, task is marked blocked. This signals an architectural problem, not "try harder."
+
+**✅ GOOD:**
+- Reviewed all 5 workers' output before merge
+- Caught integration issue in worker 3 → sent specific feedback → worker fixed in 5min
+- Approved 4/5 on first review, 1/5 needed minor fixes
+- Used swarm_review to get epic context + diff → comprehensive review
+
+**❌ BAD:**
+- Workers said "done", coordinator just closed cells → shipped broken integration
+- Skipped review "to save time" → broke production
+- Rejected worker output 3 times without guidance → worker stuck, no architectural input
 
 ### 9. Complete
 
@@ -385,6 +630,26 @@ gh pr create --title "feat: <epic title>" --body "## Summary\n<bullets>\n\n## Be
 | Architecture decisions | `skills_use(name="system-design")`                      |
 | Breaking dependencies  | `skills_use(name="testing-patterns")`                   |
 
+## Event Tracking Reference (for eval visibility)
+
+These events are now tracked for coordinator evaluation:
+
+| Event Type               | When Fired                                |
+| ------------------------ | ----------------------------------------- |
+| `session_initialized`    | swarmmail_init called                     |
+| `skill_loaded`           | skills_use called                         |
+| `researcher_spawned`     | Task(subagent_type="swarm-researcher")    |
+| `worker_spawned`         | Task(subagent_type="swarm/worker")        |
+| `decomposition_complete` | hive_create_epic called                   |
+| `inbox_checked`          | swarmmail_inbox called                    |
+| `blocker_resolved`       | Coordinator unblocked stuck worker        |
+| `scope_change_approved`  | Coordinator approved scope expansion      |
+| `scope_change_rejected`  | Coordinator rejected scope expansion      |
+| `review_completed`       | swarm_review_feedback called              |
+| `epic_complete`          | swarm_complete called for epic            |
+
+**These events drive eval scoring.** Good coordinators fire the right events at the right times.
+
 ## Context Preservation Rules
 
 **These are NON-NEGOTIABLE. Violating them burns context and kills long swarms.**
@@ -403,14 +668,19 @@ Not: Do Everything Inline → Run Out of Context → Fail
 
 ## Quick Checklist
 
-- [ ] **swarmmail_init** called FIRST
+- [ ] **swarmmail_init** called FIRST → Event: `session_initialized`
 - [ ] Knowledge gathered (semantic-memory, CASS, pdf-brain, skills)
+- [ ] **Skills loaded** → Event: `skill_loaded` (per skill)
+- [ ] **Researcher spawned if needed** → Event: `researcher_spawned`
 - [ ] **Planning delegated to swarm/planner subagent** (NOT inline)
 - [ ] CellTree validated (no file conflicts)
-- [ ] Epic + subtasks created
+- [ ] Epic + subtasks created → Event: `decomposition_complete`
 - [ ] **Coordinator did NOT reserve files** (workers do this themselves)
-- [ ] Workers spawned in parallel
-- [ ] Progress monitored via **swarmmail_inbox** (limit=5, no bodies)
+- [ ] Workers spawned in parallel → Event: `worker_spawned` (per worker)
+- [ ] **Inbox monitored every 5-10 min** → Event: `inbox_checked` (multiple)
+- [ ] **Blockers resolved** → Event: `blocker_resolved` (if any)
+- [ ] **Scope changes handled** → Event: `scope_change_approved/rejected` (if any)
+- [ ] **All workers reviewed** → Event: `review_completed` (per worker)
 - [ ] PR created (or pushed to main)
 - [ ] **ASCII art session summary** (MANDATORY - see below)
 
