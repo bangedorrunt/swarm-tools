@@ -8,6 +8,7 @@
     "adr-003-performance",
     "adr-004-message-queue",
     "adr-005-devtools",
+    "adr-006-swarm-pty",
     "edr-event-sourced-beads"
   ]
 }

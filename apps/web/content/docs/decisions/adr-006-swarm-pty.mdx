@@ -1,0 +1,540 @@
+---
+title: "ADR-006: Swarm-Integrated PTY Management"
+description: Background process management with agent coordination, file reservations, and learning signals
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+# ADR-006: Swarm-Integrated PTY Management
+
+<Callout type="warn">
+**Status:** Proposed  
+**Date:** December 2024
+</Callout>
+
+## Context
+
+OpenCode's built-in `bash` tool runs commands synchronously - the agent blocks until completion. This works for quick commands but fails for:
+
+- **Dev servers** (`npm run dev`, `next dev`, `cargo watch`)
+- **Watch mode tests** (`vitest --watch`, `jest --watch`)
+- **Long-running processes** (database servers, tunnels, background jobs)
+- **Interactive REPLs** (node, python, psql)
+
+An existing community plugin ([shekohex/opencode-pty](https://github.com/shekohex/opencode-pty)) solves the basic problem with clean PTY session management. However, it lacks swarm coordination:
+
+- No tie-in to cell ownership
+- No Agent Mail reservations for PTY sessions
+- No learning signals from process outcomes
+- No cross-agent visibility into running processes
+
+## Decision
+
+**Yoink the core PTY management from opencode-pty and integrate it with swarm primitives.**
+
+### Core Components (Adapted from opencode-pty)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     PTY MANAGER                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │  RingBuffer │    │   Session   │    │  Lifecycle  │     │
+│  │  (output)   │    │   Manager   │    │  Tracking   │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+│                                                             │
+│  From opencode-pty:                                         │
+│  • bun-pty for real PTY handling                           │
+│  • Ring buffer with configurable max lines (50k default)   │
+│  • Regex filtering on read                                  │
+│  • Pagination (offset/limit)                                │
+│  • Session lifecycle (running/exited/killed)               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Swarm Integration Layer (New)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  SWARM PTY COORDINATION                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │    Cell     │    │ Agent Mail  │    │  Learning   │     │
+│  │  Ownership  │    │ Reservation │    │  Signals    │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+│         │                  │                  │             │
+│         ▼                  ▼                  ▼             │
+│  PTY tied to cell   Only owner can    Process exit codes   │
+│  ID (bd-123.2)      write/kill        feed into outcomes   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Tools
+
+| Tool | Description | Swarm Integration |
+|------|-------------|-------------------|
+| `pty_spawn` | Create PTY session | Ties to cell ID, auto-reserves |
+| `pty_read` | Read output buffer | All agents can read (observability) |
+| `pty_write` | Send input to PTY | **Owner only** (via reservation) |
+| `pty_kill` | Terminate PTY | **Owner only**, releases reservation |
+| `pty_list` | List all sessions | Shows ownership, cell IDs |
+| `pty_transfer` | Hand off ownership | Updates reservation to new agent |
+| `pty_status` | Health + metrics | Includes signals for learning |
+
+### Ownership Model
+
+```typescript
+interface SwarmPTYSession {
+  // From opencode-pty
+  id: string;                    // pty_a1b2c3d4
+  command: string;
+  args: string[];
+  workdir: string;
+  status: "running" | "exited" | "killed";
+  exitCode?: number;
+  pid: number;
+  buffer: RingBuffer;
+  
+  // Swarm integration
+  cellId: string;                // bd-123.2 (owning cell)
+  ownerAgent: string;            // BlueLake
+  reservationId: number;         // Agent Mail reservation
+  spawnedAt: Date;
+  healthChecks: HealthCheck[];   // For learning signals
+}
+
+interface HealthCheck {
+  timestamp: Date;
+  healthy: boolean;
+  signal?: string;               // "ready", "error", "timeout"
+  pattern?: string;              // Matched output pattern
+}
+```
+
+### Reservation Integration
+
+When spawning a PTY:
+
+```typescript
+// 1. Spawn PTY
+const pty = await ptySpawn({
+  command: "npm",
+  args: ["run", "dev"],
+  cellId: "bd-123.2",
+  title: "Dev Server"
+});
+
+// 2. Auto-reserve (internal)
+await agentmail_reserve({
+  paths: [`pty:${pty.id}`],      // Virtual path for PTY
+  reason: `bd-123.2: Dev server`,
+  ttl_seconds: 3600
+});
+
+// 3. Other agents can read but not write
+pty_read({ id: pty.id })         // OK for any agent
+pty_write({ id: pty.id, ... })   // DENIED unless owner
+```
+
+### Learning Signals
+
+PTY outcomes feed into `swarm_record_outcome`:
+
+```typescript
+// On process exit
+const outcome = {
+  pty_id: session.id,
+  cell_id: session.cellId,
+  exit_code: session.exitCode,
+  duration_ms: Date.now() - session.spawnedAt.getTime(),
+  health_signals: session.healthChecks,
+  
+  // Derived signals
+  crashed: session.exitCode !== 0 && session.status === "exited",
+  timeout: session.healthChecks.some(h => h.signal === "timeout"),
+  ready_time_ms: getReadyTime(session.healthChecks),
+};
+
+// Feed into learning
+swarm_record_outcome({
+  bead_id: session.cellId,
+  success: !outcome.crashed,
+  duration_ms: outcome.duration_ms,
+  error_count: outcome.crashed ? 1 : 0,
+});
+```
+
+### Health Check Patterns
+
+Agents can register patterns to detect readiness/errors:
+
+```typescript
+pty_spawn({
+  command: "npm",
+  args: ["run", "dev"],
+  cellId: "bd-123.2",
+  healthPatterns: {
+    ready: /ready in \d+ms|listening on/i,
+    error: /error|failed|EADDRINUSE/i,
+    timeout: 30000  // ms to wait for ready pattern
+  }
+});
+```
+
+The manager watches output and updates health checks:
+
+```typescript
+ptyProcess.onData((data: string) => {
+  buffer.append(data);
+  
+  // Check health patterns
+  if (opts.healthPatterns?.ready?.test(data)) {
+    session.healthChecks.push({
+      timestamp: new Date(),
+      healthy: true,
+      signal: "ready",
+      pattern: opts.healthPatterns.ready.source
+    });
+  }
+  
+  if (opts.healthPatterns?.error?.test(data)) {
+    session.healthChecks.push({
+      timestamp: new Date(),
+      healthy: false,
+      signal: "error",
+      pattern: opts.healthPatterns.error.source
+    });
+  }
+});
+```
+
+## Consequences
+
+### Easier
+
+- **Swarm workers can run dev servers** - Verify changes against running app
+- **Cross-agent visibility** - Any agent can read PTY output for debugging
+- **Ownership prevents conflicts** - Only owner can write/kill
+- **Learning from processes** - Exit codes, health signals feed into outcomes
+- **Handoff support** - Transfer PTY ownership between agents
+
+### More Difficult
+
+- **Complexity** - More moving parts than standalone plugin
+- **Reservation overhead** - Every PTY needs Agent Mail coordination
+- **State management** - PTY sessions must survive agent restarts
+- **Testing** - Need to mock bun-pty for unit tests
+
+## Implementation Plan
+
+### Phase 1: Core PTY (Day 1)
+
+- [ ] Add `bun-pty` dependency
+- [ ] Port `RingBuffer` from opencode-pty
+- [ ] Port `PTYManager` with spawn/read/write/kill
+- [ ] Basic tools without swarm integration
+- [ ] Unit tests with mocked PTY
+
+### Phase 2: Swarm Integration (Day 1-2)
+
+- [ ] Add cell ID and owner tracking
+- [ ] Auto-reserve on spawn
+- [ ] Ownership checks on write/kill
+- [ ] `pty_transfer` for handoff
+- [ ] Integration tests with Agent Mail
+
+### Phase 3: Learning Signals (Day 2)
+
+- [ ] Health check patterns
+- [ ] Ready/error/timeout detection
+- [ ] Feed outcomes to `swarm_record_outcome`
+- [ ] Metrics for PTY performance
+
+### Phase 4: DevTools Integration (Future)
+
+- [ ] PTY sessions in DevTools UI
+- [ ] Live output streaming via SSE
+- [ ] CLI commands for PTY management
+
+## Alternatives Considered
+
+### 1. Use opencode-pty as-is
+
+**Rejected.** No swarm integration means:
+- No ownership model
+- No learning signals
+- No cross-agent coordination
+- Would need to fork anyway for integration
+
+### 2. Fork opencode-pty
+
+**Rejected.** Adds external dependency management. The core is ~200 lines - easier to adapt directly.
+
+### 3. Build from scratch
+
+**Rejected.** opencode-pty already solved the hard parts (bun-pty integration, ring buffer, lifecycle). No need to reinvent.
+
+## Extension: GitHub CI/CD Monitor
+
+Beyond local PTY sessions, the same coordination model applies to **remote process monitoring** - specifically GitHub Actions workflows.
+
+### The Problem
+
+Current workflow for CI feedback:
+
+```
+1. Push changes
+2. Wait... (blocked)
+3. gh run view --watch (still blocked)
+4. Finally get result
+5. Resume work
+```
+
+Agents waste context waiting for CI. With background monitoring:
+
+```
+1. Push changes
+2. Spawn CI monitor (background)
+3. Continue working on next task
+4. Get notified when CI completes/fails
+5. React only if needed
+```
+
+### CI Monitor Tool
+
+```typescript
+interface CIMonitorSession {
+  id: string;                    // ci_a1b2c3d4
+  repo: string;                  // owner/repo
+  runId?: number;                // GitHub run ID (if watching specific run)
+  branch?: string;               // Watch runs on this branch
+  workflow?: string;             // Filter by workflow name
+  
+  // Swarm integration
+  cellId: string;                // bd-123.2
+  ownerAgent: string;            // BlueLake
+  
+  // State
+  status: "watching" | "completed" | "failed" | "cancelled";
+  lastCheck: Date;
+  runs: CIRun[];                 // Tracked runs
+}
+
+interface CIRun {
+  id: number;
+  name: string;
+  status: "queued" | "in_progress" | "completed";
+  conclusion?: "success" | "failure" | "cancelled" | "skipped";
+  url: string;
+  startedAt: Date;
+  completedAt?: Date;
+  jobs: CIJob[];
+}
+```
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `ci_watch` | Start monitoring CI for repo/branch/workflow |
+| `ci_status` | Get current status of monitored runs |
+| `ci_logs` | Fetch logs for a specific job (on failure) |
+| `ci_stop` | Stop monitoring |
+| `ci_retry` | Retry a failed workflow |
+
+### Usage Flow
+
+```typescript
+// 1. Push and start monitoring
+await bash("git push origin feature-branch");
+
+const monitor = await ci_watch({
+  repo: "owner/repo",
+  branch: "feature-branch",
+  cellId: "bd-123.2",
+  notifyOn: ["failure", "success"],  // or just "failure"
+  timeout: 1800000  // 30 min max
+});
+
+// 2. Continue working on other tasks
+// ... agent does other work ...
+
+// 3. Background: Monitor polls gh CLI
+// gh run list --branch feature-branch --json status,conclusion,databaseId
+
+// 4. On completion, sends Agent Mail notification
+swarmmail_send({
+  to: ["BlueLake"],  // owner agent
+  subject: "CI completed: bd-123.2",
+  body: "Workflow 'test' succeeded in 4m32s",
+  importance: "normal",
+  thread_id: "bd-123"
+});
+
+// 5. On failure, includes actionable info
+swarmmail_send({
+  to: ["BlueLake"],
+  subject: "CI FAILED: bd-123.2",
+  body: `Workflow 'test' failed at job 'unit-tests'
+         
+Failed step: Run tests
+Exit code: 1
+Logs: https://github.com/owner/repo/actions/runs/12345
+
+Last 20 lines:
+\`\`\`
+FAIL src/auth.test.ts
+  ✕ should validate token (15ms)
+    Expected: true
+    Received: false
+\`\`\``,
+  importance: "high",
+  thread_id: "bd-123"
+});
+```
+
+### Implementation
+
+Uses `gh` CLI under the hood (no API tokens needed if already authed):
+
+```typescript
+class CIMonitor {
+  private sessions: Map<string, CIMonitorSession> = new Map();
+  private pollInterval = 15000; // 15 seconds
+  
+  async watch(opts: WatchOptions): Promise<CIMonitorSession> {
+    const id = generateId("ci");
+    const session: CIMonitorSession = {
+      id,
+      repo: opts.repo,
+      branch: opts.branch,
+      workflow: opts.workflow,
+      cellId: opts.cellId,
+      ownerAgent: opts.ownerAgent,
+      status: "watching",
+      lastCheck: new Date(),
+      runs: []
+    };
+    
+    this.sessions.set(id, session);
+    this.startPolling(session);
+    return session;
+  }
+  
+  private async poll(session: CIMonitorSession) {
+    // Get runs via gh CLI
+    const result = await $`gh run list \
+      --repo ${session.repo} \
+      ${session.branch ? `--branch ${session.branch}` : ''} \
+      ${session.workflow ? `--workflow ${session.workflow}` : ''} \
+      --json databaseId,name,status,conclusion,url,createdAt \
+      --limit 5`;
+    
+    const runs = JSON.parse(result.stdout);
+    
+    for (const run of runs) {
+      const existing = session.runs.find(r => r.id === run.databaseId);
+      
+      if (!existing) {
+        // New run detected
+        session.runs.push(this.toRun(run));
+      } else if (existing.status !== run.status) {
+        // Status changed
+        existing.status = run.status;
+        existing.conclusion = run.conclusion;
+        
+        if (run.status === "completed") {
+          await this.notifyCompletion(session, existing);
+        }
+      }
+    }
+  }
+  
+  private async notifyCompletion(session: CIMonitorSession, run: CIRun) {
+    const success = run.conclusion === "success";
+    
+    // Fetch failure logs if needed
+    let failureLogs = "";
+    if (!success) {
+      failureLogs = await this.getFailureLogs(session.repo, run.id);
+    }
+    
+    await swarmmail_send({
+      to: [session.ownerAgent],
+      subject: success 
+        ? `CI passed: ${session.cellId}`
+        : `CI FAILED: ${session.cellId}`,
+      body: success
+        ? `Workflow '${run.name}' succeeded`
+        : `Workflow '${run.name}' failed\n\n${failureLogs}`,
+      importance: success ? "normal" : "high",
+      thread_id: session.cellId.split('.')[0]  // Epic ID
+    });
+    
+    // Feed into learning
+    swarm_record_outcome({
+      bead_id: session.cellId,
+      success,
+      duration_ms: run.completedAt!.getTime() - run.startedAt.getTime(),
+      error_count: success ? 0 : 1
+    });
+  }
+  
+  private async getFailureLogs(repo: string, runId: number): Promise<string> {
+    // Get failed job logs
+    const result = await $`gh run view ${runId} \
+      --repo ${repo} \
+      --log-failed \
+      | tail -50`;
+    
+    return result.stdout;
+  }
+}
+```
+
+### Learning Integration
+
+CI outcomes are gold for learning:
+
+```typescript
+// Track patterns
+semantic_memory_store({
+  information: `CI failure pattern: ${repo} fails on 'typecheck' job 
+    when touching src/types/**. Root cause: generated types not 
+    committed. Fix: run 'npm run generate' before push.`,
+  tags: "ci,failure-pattern,types,codegen"
+});
+
+// Feed into swarm outcomes
+swarm_record_outcome({
+  bead_id: cellId,
+  success: false,
+  duration_ms: ciDuration,
+  error_count: 1,
+  // CI-specific metadata
+  ci_workflow: "test",
+  ci_job: "typecheck",
+  ci_failure_pattern: "missing-generated-types"
+});
+```
+
+### Phase 5: CI Monitor (Future)
+
+- [ ] `ci_watch` tool with gh CLI polling
+- [ ] Agent Mail notifications on completion/failure
+- [ ] Failure log extraction and summarization
+- [ ] Learning signal integration
+- [ ] Retry support (`ci_retry`)
+- [ ] Multi-repo monitoring for monorepos
+
+## References
+
+- [shekohex/opencode-pty](https://github.com/shekohex/opencode-pty) - Source implementation
+- [bun-pty](https://github.com/nicksrandall/bun-pty) - PTY bindings for Bun
+- [ADR-004: Message Queue](./adr-004-message-queue) - Agent Mail primitives
+- [ADR-005: DevTools](./adr-005-devtools) - Observability integration
+- [GitHub CLI](https://cli.github.com/) - `gh run` commands for CI monitoring
