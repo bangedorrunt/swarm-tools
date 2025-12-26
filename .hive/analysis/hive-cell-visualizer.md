@@ -137,7 +137,7 @@ Each event has:
 2. **Ecosystem**: We're TypeScript/Bun
 3. **Integration**: Must work with swarm plugin tools
 4. **Realtime**: Want live updates as agents work
-5. **Modern stack**: Opportunity to use TanStack Start
+5. **Lightweight**: Local dev tool, not production SaaS - don't need SSR/RSC complexity
 
 ### Options Considered
 
@@ -147,8 +147,9 @@ Each event has:
 | **B. Build TUI from scratch** | TypeScript native, tight integration | Significant effort, reinventing wheel |
 | **C. Static HTML export** | Zero dependencies, shareable, works offline | No live updates, build step required |
 | **D. beads-ui style (Express + WebSocket)** | Proven architecture, live updates | Older stack, manual state management, no resumability |
-| **E. TanStack Start + Durable Streams** | Modern stack, SSR, type-safe, resumable | New framework (RC), learning curve |
-| **F. Hybrid: CLI + TanStack Start + Durable Streams** | Best of both worlds, production-proven protocol | More code to maintain |
+| **E. TanStack Start + Durable Streams** | Modern stack, SSR, type-safe, resumable | RC framework, overkill for local tool, learning curve |
+| **F. Next.js + Durable Streams** | Familiar, production-ready | Overkill for localhost, RSC complexity unnecessary |
+| **G. Vite + Nitro + Durable Streams** | Bun-native, zero config, lightweight, fast | Less batteries-included than Next.js |
 
 ---
 
@@ -538,23 +539,23 @@ What we need:
 │                                      │                                          │
 │                                      ▼                                          │
 │  ┌─────────────────────────────────────────────────────────────────────────┐    │
-│  │                    TANSTACK START APP                                   │    │
+│  │                    VITE + REACT APP (packages/swarm-dashboard)          │    │
 │  │  ─────────────────────────────────────────────────────────────────────  │    │
 │  │                                                                         │    │
 │  │  ┌───────────────────────┐    ┌───────────────────────────────────┐     │    │
-│  │  │    Server Functions   │    │       React Components            │     │    │
+│  │  │    Data Fetching      │    │       React Components            │     │    │
 │  │  │  ───────────────────  │    │  ───────────────────────────────  │     │    │
 │  │  │                       │    │                                   │     │    │
-│  │  │  • getCells()         │    │  • GraphView (force-graph)        │     │    │
-│  │  │  • getAgents()        │    │  • KanbanBoard                    │     │    │
-│  │  │  • getMessages()      │    │  • EpicProgress                   │     │    │
-│  │  │  • getReservations()  │    │  • AgentActivity                  │     │    │
-│  │  │  • subscribe()        │    │  • MessageFeed                    │     │    │
-│  │  │                       │    │  • FileReservations               │     │    │
+│  │  │  • SSE /events stream │    │  • AgentsPane ✅                  │     │    │
+│  │  │  • REST GET /cells    │    │  • EventsPane ✅                  │     │    │
+│  │  │  • useEventSource()   │    │  • CellsPane ✅ (tree view)       │     │    │
+│  │  │  • useSwarmEvents()   │    │  • TableView (TODO - sortable)    │     │    │
+│  │  │                       │    │  • KanbanBoard (LATER - maybe)    │     │    │
+│  │  │                       │    │                                   │     │    │
 │  │  └───────────────────────┘    └───────────────────────────────────┘     │    │
 │  │                                                                         │    │
-│  │  SSR + Streaming → Fast initial load                                    │    │
-│  │  @durable-streams/client → Live updates from event stream               │    │
+│  │  NO SSR - This is a local dev tool, not a public website                │    │
+│  │  SSE for events, REST polling for cells (5s interval)                   │    │
 │  │                                                                         │    │
 │  └─────────────────────────────────────────────────────────────────────────┘    │
 │                                                                                 │
@@ -782,49 +783,19 @@ $ swarm viz --kanban
 └─────────────┴─────────────┴─────────────┴─────────────┘
 ```
 
-### HTML Export
+### HTML Export (LATER)
 
-The static HTML export will be a **self-contained single file** with:
+Static HTML export is a **nice-to-have**, not MVP. When we do it:
 
-1. **Force-directed graph** (D3.js or force-graph)
-2. **Detail pane** (click node to see full cell info)
+1. **Table view** (sortable, filterable)
+2. **Tree view** (collapsible hierarchy)
 3. **Filters** (status, type, priority)
 4. **Search** (fuzzy match on title/description)
 5. **Embedded data** (JSON blob in `<script>` tag)
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Hive Visualizer - opencode-swarm-plugin</title>
-  <style>/* Tailwind or inline CSS */</style>
-</head>
-<body>
-  <div id="app">
-    <!-- Alpine.js reactive UI -->
-    <div id="graph"></div>
-    <div id="detail-pane"></div>
-    <div id="filters"></div>
-  </div>
-  
-  <script>
-    // Embedded cell data
-    const HIVE_DATA = {
-      cells: [...],
-      edges: [...],
-      metrics: {...},
-      generated_at: "2025-12-23T..."
-    };
-  </script>
-  
-  <script src="https://unpkg.com/force-graph"></script>
-  <script src="https://unpkg.com/alpinejs"></script>
-  <script>/* Visualization logic */</script>
-</body>
-</html>
-```
+**NO force-directed graphs.** Just boring, useful tables.
 
-**File size target:** < 500KB including all dependencies (inline CDN scripts).
+**File size target:** < 100KB (no heavy viz libraries).
 
 ---
 
@@ -927,74 +898,59 @@ async function buildVizGraph(projectPath: string): Promise<VizGraph>;
 - [ ] Add color coding (picocolors)
 - [ ] Add `swarm viz` CLI command
 
-### Phase 3: TanStack Start Web App (Week 3-4)
+### Phase 3: Vite + React Web App (ALREADY STARTED)
 
-**Goal:** Real-time interactive visualization with Durable Streams.
+**Goal:** Real-time interactive visualization.
+
+**ACTUAL LOCATION:** `packages/swarm-dashboard/` (NOT apps/hive-viz)
 
 ```
-apps/
-  hive-viz/
-    app/
-      routes/
-        index.tsx           # Dashboard with overview
-        graph.tsx           # Force-directed dependency graph
-        kanban.tsx          # Kanban board view
-        epic.$id.tsx        # Epic detail with subtask progress
-        activity.tsx        # Live activity feed
+packages/
+  swarm-dashboard/
+    src/
       components/
-        GraphView.tsx       # force-graph visualization
-        KanbanBoard.tsx     # Drag-and-drop columns
-        EpicProgress.tsx    # Progress bars, burndown
-        AgentActivity.tsx   # Who's doing what
-        MessageFeed.tsx     # Swarm mail messages
-        FileReservations.tsx # Who owns what files
+        AgentsPane.tsx      ✅ DONE - Event-driven (SSE → useMemo)
+        EventsPane.tsx      ✅ DONE - Event-driven
+        CellsPane.tsx       ✅ DONE - REST polling (needs /cells endpoint)
+        AgentCard.tsx       ✅ DONE - Display component
+        EventRow.tsx        ✅ DONE - Display component
+        CellNode.tsx        ✅ DONE - Display component
+        Layout.tsx          ✅ DONE - Shell
+        SwarmCard.tsx       ✅ DONE
+        StatsGrid.tsx       ✅ DONE
       hooks/
-        useEventStream.ts   # Durable Streams subscription
-        useCells.ts         # Cell state from events
-        useAgents.ts        # Agent state from events
+        useEventSource.ts   ✅ DONE - SSE connection
+        useSwarmEvents.ts   ✅ DONE - Event stream processing
       lib/
-        projections.ts      # Client-side event projections
-    app.config.ts           # TanStack Start config
-    package.json
+        api.ts              ✅ DONE - getCells with tree building
+        types.ts            ✅ DONE
+      App.tsx               ❌ TODO - Wire up components (still Vite template!)
+    package.json            # Vite + React 19 + Tailwind 4
 ```
 
-**Tasks:**
-- [ ] Initialize TanStack Start app in `apps/hive-viz/`
-- [ ] Create `useEventStream` hook with `@durable-streams/client`
-- [ ] Implement client-side projections (cells, agents, messages)
-- [ ] Create GraphView component with force-graph
-- [ ] Create KanbanBoard component
-- [ ] Create EpicProgress component
-- [ ] Create AgentActivity component (live agent status)
-- [ ] Create MessageFeed component (swarm mail messages)
-- [ ] Create FileReservations component (who owns what)
-- [ ] Add SSR for fast initial load
-- [ ] Add `swarm viz --serve` CLI command to start server
+**BLOCKED ON:**
+- [ ] GET /cells endpoint in `swarm-mail/src/streams/durable-server.ts`
+- [ ] Wire App.tsx to use Layout + panes
 
-### Phase 4: Static Export + Integration (Week 5)
+**Remaining Tasks:**
+- [ ] Add GET /cells endpoint to durable-server.ts
+- [ ] Wire App.tsx to use Layout, AgentsPane, EventsPane, CellsPane
+- [ ] Add force-graph GraphView component
+- [ ] Add KanbanBoard component
+- [ ] Add `swarm viz --serve` CLI command to start both servers
 
-**Goal:** Self-contained HTML export and plugin integration.
+### Phase 4: Static Export + Integration (LATER)
 
-```typescript
-// packages/opencode-swarm-plugin/src/viz/html.ts
+**Goal:** Self-contained HTML export. NOT MVP.
 
-async function exportHtml(graph: VizGraph, outputPath: string): Promise<void>;
-```
+**Deferred until web dashboard is solid.**
 
-**Tasks:**
-- [ ] Create HTML template with embedded CSS (Tailwind)
-- [ ] Integrate force-graph library (inline)
-- [ ] Implement detail pane
-- [ ] Add filter controls
-- [ ] Add search functionality
-- [ ] Inline all dependencies (no external requests)
+**When we do it:**
+- [ ] Create HTML template with embedded CSS
+- [ ] Table view with sorting/filtering
+- [ ] Tree view with collapsible nodes
+- [ ] NO force-graph bullshit
 - [ ] Add `swarm viz --export` CLI command
-- [ ] Add `viz_status` tool to plugin
-- [ ] Add `viz_serve` tool to plugin
-- [ ] Add `viz_export` tool to plugin
-- [ ] Write tests for all components
-- [ ] Documentation
-- [ ] Changeset and release
 
 ---
 
@@ -1019,22 +975,26 @@ async function exportHtml(graph: VizGraph, outputPath: string): Promise<void>;
 1. Use `@durable-streams/server` reference implementation
 2. Build custom adapter with Bun.serve (simpler, fewer deps)
 
-### 2. TanStack Start over Next.js
+### 2. Vite + React over Next.js/TanStack Start
 
-**Decision:** Use TanStack Start for the web app.
+**Decision:** Use plain Vite + React for the web app.
 
 **Rationale:**
-- **Type-safe routing**: Router params, search params, loaders all typed
-- **Server functions**: Type-safe RPCs without API routes boilerplate
-- **SSR + Streaming**: Fast initial load with progressive enhancement
-- **Vite-powered**: Fast dev server, optimized builds
-- **Framework-agnostic**: Works with Bun, Node, Cloudflare, Vercel
-- **Modern React**: Suspense, transitions, concurrent features
+- **Local dev tool**: No SEO, no public website, no SSR needed
+- **Simplicity**: Just React components + SSE, no framework overhead
+- **Fast iteration**: Vite HMR is instant
+- **Already started**: `packages/swarm-dashboard/` exists with working components
+- **Bun-native**: Works perfectly with our Bun-based toolchain
+
+**Why NOT TanStack Start or Next.js:**
+- Overkill for localhost-only dashboard
+- RSC/SSR complexity unnecessary for local SQLite queries
+- Framework learning curve for simple CRUD UI
+- We don't need edge runtime, image optimization, or app router
 
 **Tradeoff:**
-- Currently in RC (not 1.0 yet)
-- Smaller ecosystem than Next.js
-- Acceptable because we're building internal tooling, not production SaaS
+- No SSR (acceptable - local tool, not public website)
+- Manual routing (acceptable - only 3-4 views)
 
 ### 3. No TUI Framework (Bubble Tea Alternative)
 
@@ -1050,19 +1010,26 @@ async function exportHtml(graph: VizGraph, outputPath: string): Promise<void>;
 - No interactive navigation (j/k keys, etc.)
 - Acceptable because we have web app for rich interaction
 
-### 4. Force-Graph over D3 Raw
+### 4. Boring First, Eye Candy Later
 
-**Decision:** Use [force-graph](https://github.com/vasturiano/force-graph) library.
+**Decision:** NO force-directed graphs. Start with tables, trees, and lists.
 
 **Rationale:**
-- Built on D3 but with simpler API
-- Handles zoom, pan, node dragging out of the box
-- WebGL rendering for performance
-- Same library beads_viewer uses
+- Force graphs are the "word cloud" of data viz - impressive demos, useless for work
+- You can't actually DO anything with a force graph except watch it wiggle
+- Tables are sortable, filterable, actionable
+- Trees show hierarchy clearly
+- Lists show activity chronologically
 
-**Tradeoff:**
-- ~150KB minified
-- Acceptable for web app (tree-shaken in build)
+**Future (MAYBE):**
+- Matrix-style raw data flow visualization (when we have real needs)
+- But only after boring views are rock solid
+
+**What we're building:**
+1. Tree view (cells with hierarchy) ✅ exists
+2. Table view (sortable columns) - TODO
+3. Activity feed (events stream) ✅ exists
+4. Agent status (who's working) ✅ exists
 
 ### 5. Client-Side Projections
 
@@ -1216,54 +1183,36 @@ $ open ./hive-status.html
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| Force-graph performance with large graphs | Low | Medium | Limit to 500 nodes, warn user |
-| HTML file size too large | Medium | Low | Minify, compress, lazy-load |
-| Cycle detection slow | Low | Low | Use efficient Tarjan's algorithm |
+| Scope creep (fancy viz) | High | Medium | BORING FIRST. Tables and trees only. |
 | CLI output ugly in non-Unicode terminals | Medium | Low | Detect and fall back to ASCII |
-| Scope creep (adding more metrics) | High | Medium | Strict P0/P1/P2 prioritization |
+| SSE connection drops | Medium | Low | Auto-reconnect with backoff |
 
 ---
 
 ## Success Criteria
 
-### MVP (Phase 1-2)
+### MVP (What Actually Matters)
 
-- [ ] Durable Streams adapter exposes swarm-mail events
-- [ ] Offset-based reads work correctly (resume from any point)
-- [ ] Live tailing works (new events pushed to subscribers)
-- [ ] `swarm viz` shows status table with epic progress
-- [ ] `swarm viz --tree` shows dependency tree
-- [ ] Cycle detection works and displays warnings
-- [ ] Critical path is highlighted
+- [x] AgentsPane shows who's working ✅ DONE
+- [x] EventsPane shows activity feed ✅ DONE
+- [x] CellsPane shows tree view ✅ DONE
+- [ ] GET /cells endpoint in durable-server.ts
+- [ ] App.tsx wired to use components (not Vite template)
+- [ ] `swarm viz --serve` starts the dashboard
+- [ ] Dashboard loads real data from swarm-mail
 
-### Web App (Phase 3)
+### Phase 2 (Useful Additions)
 
-- [ ] `swarm viz --serve` starts TanStack Start server
-- [ ] Dashboard shows overview (cells by status, active agents)
-- [ ] Graph view shows force-directed dependency graph
-- [ ] Kanban view shows drag-and-drop columns
-- [ ] Epic detail shows subtask progress
-- [ ] Activity feed shows live events as they happen
-- [ ] Page refresh resumes from last offset (no lost events)
-- [ ] Multiple tabs work without duplicating connections
+- [ ] TableView with sortable columns
+- [ ] Filters (status, type, priority)
+- [ ] Search (fuzzy match)
+- [ ] CLI `swarm viz` shows status table
 
-### Static Export (Phase 4)
+### Future (Eye Candy - ONLY AFTER BORING WORKS)
 
-- [ ] `swarm viz --export` generates working HTML file
-- [ ] HTML export has force-directed graph
-- [ ] HTML export has detail pane on node click
-- [ ] HTML export has filters (status, type, priority)
-- [ ] HTML export has search
-- [ ] Single file, works offline
-
-### Nice-to-Have (Future)
-
-- [ ] Agent assignment visualization (who's working on what)
-- [ ] File reservation overlay (who owns what files)
-- [ ] Message thread view (swarm mail conversations)
-- [ ] Time-travel (replay events from any point)
-- [ ] Compare to git revision (diff between commits)
-- [ ] Shareable links (stream URL for team viewing)
+- [ ] Matrix-style raw data flow visualization
+- [ ] Time-travel (replay events)
+- [ ] Static HTML export
 
 ---
 
@@ -1330,11 +1279,9 @@ $ open ./hive-status.html
 
 ## References
 
-- [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) - Inspiration and reference implementation
-- [force-graph](https://github.com/vasturiano/force-graph) - Graph visualization library
-- [Alpine.js](https://alpinejs.dev/) - Lightweight reactivity
-- [Tarjan's SCC Algorithm](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm) - Cycle detection
-- [Critical Path Method](https://en.wikipedia.org/wiki/Critical_path_method) - Longest path calculation
+- [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) - Inspiration (but we're simpler)
+- [beads-ui](https://github.com/mantoni/beads-ui) - Web UI reference
+- [Durable Streams](https://github.com/durable-streams/durable-streams) - Event streaming protocol
 
 ---
 
@@ -1342,21 +1289,21 @@ $ open ./hive-status.html
 
 | Feature | beads_viewer | Our Visualizer | Notes |
 |---------|--------------|----------------|-------|
-| List view | ✅ | ✅ (status table) | Simplified |
-| Kanban board | ✅ | ✅ (ASCII) | Simplified |
-| Graph view | ✅ | ✅ (HTML export) | Force-graph |
-| Insights dashboard | ✅ | ❌ | Deferred |
-| History view | ✅ | ❌ | Deferred |
-| PageRank | ✅ | ❌ | P2 |
-| Betweenness | ✅ | ❌ | P2 |
-| HITS | ✅ | ❌ | P3 |
-| Critical path | ✅ | ✅ | Core |
-| Cycle detection | ✅ | ✅ | Core |
+| List view | ✅ | ✅ (tree + table) | Core |
+| Kanban board | ✅ | ❌ (LATER) | Not MVP |
+| Graph view | ✅ | ❌ (NEVER) | Force graphs are useless |
+| Insights dashboard | ✅ | ❌ | Not needed |
+| History view | ✅ | ✅ (EventsPane) | Core |
+| PageRank | ✅ | ❌ | Useless metric |
+| Betweenness | ✅ | ❌ | Useless metric |
+| HITS | ✅ | ❌ | Useless metric |
+| Critical path | ✅ | ❌ (LATER) | Nice-to-have |
+| Cycle detection | ✅ | ❌ (LATER) | Nice-to-have |
 | Robot JSON output | ✅ | ✅ | Via existing tools |
-| Static HTML export | ✅ | ✅ | Core |
-| Time-travel | ✅ | ❌ | P3 |
-| Fuzzy search | ✅ | ✅ (HTML) | HTML only |
-| Live reload | ✅ | ❌ | Not needed |
+| Static HTML export | ✅ | ❌ (LATER) | Not MVP |
+| Time-travel | ✅ | ❌ (LATER) | Future eye candy |
+| Fuzzy search | ✅ | ❌ (LATER) | Phase 2 |
+| Live reload | ✅ | ✅ (SSE) | Core |
 | Vim keybindings | ✅ | ❌ | No TUI |
 
 ---
@@ -1447,3 +1394,4 @@ $ open ./hive-status.html
 |------|--------|--------|
 | 2025-12-23 | Coordinator | Initial draft |
 | 2025-12-23 | Coordinator | Updated with TanStack Start + Durable Streams architecture |
+| 2025-12-26 | Coordinator | MAJOR REVISION: Vite + React (not TanStack Start), NO force-graphs (useless eye candy), boring-first philosophy, documented existing packages/swarm-dashboard work |
