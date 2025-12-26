@@ -57,12 +57,14 @@ jobs:
           model: "anthropic/claude-opus-4-20250514"
           api-key: ${{ secrets.AI_GATEWAY_API_KEY }}
           prompt: |
-            Generate a concise PR title (max 72 chars) for this release. Rules:
-            - Start with lowercase verb (add, fix, feat, improve, etc)
+            Generate a concise PR title (max 60 chars) for this release. Rules:
+            - Start with "release: " prefix
+            - Then lowercase verb (add, fix, improve, etc)
             - Be specific about what changed
             - No version numbers
-            - No "chore:" prefix
             - Output ONLY the title, nothing else
+            
+            Example: "release: add swarm analytics and query tools"
             
             Changesets:
             ${{ steps.changesets_content.outputs.content }}
@@ -72,7 +74,7 @@ jobs:
         run: |
           TITLE="${{ steps.pr_title.outputs.text }}"
           if [ -z "$TITLE" ]; then
-            TITLE="chore: update versions"
+            TITLE="release: update versions"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
 
@@ -98,9 +100,9 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Find the last merged PR that isn't a version bump
-          # This gets the actual feature PR, not "chore: update versions"
+          # This gets the actual feature PR, not "release: ..." PRs
           FEATURE_PR=$(gh pr list --state merged --limit 5 --json url,title \
-            --jq '[.[] | select(.title | startswith("chore: update versions") | not)] | .[0].url')
+            --jq '[.[] | select(.title | startswith("release:") | not)] | .[0].url')
           
           if [ -n "$FEATURE_PR" ]; then
             echo "release_url=$FEATURE_PR" >> $GITHUB_OUTPUT
