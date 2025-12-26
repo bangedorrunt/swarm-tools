@@ -53,9 +53,36 @@ Done. You're swarming.
 
 Swarms learn from outcomes. Every completed subtask records what worked and what failed - then injects that wisdom into future prompts.
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        SWARM LEARNING LOOP                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐         │
+│   │  TASK    │───▶│ DECOMPOSE│───▶│  EXECUTE │───▶│ COMPLETE │         │
+│   └──────────┘    └──────────┘    └──────────┘    └──────────┘         │
+│        ▲               │               │               │                │
+│        │               ▼               ▼               ▼                │
+│        │         ┌─────────────────────────────────────────┐            │
+│        │         │           EVENT STORE                   │            │
+│        │         │  subtask_outcome, eval_finalized, ...   │            │
+│        │         └─────────────────────────────────────────┘            │
+│        │                           │                                    │
+│        │                           ▼                                    │
+│        │         ┌─────────────────────────────────────────┐            │
+│        │         │         INSIGHTS LAYER                  │            │
+│        │         │  Strategy | File | Pattern insights     │            │
+│        │         └─────────────────────────────────────────┘            │
+│        │                           │                                    │
+│        └───────────────────────────┘                                    │
+│                  (injected into next decomposition)                     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### The Insights Layer
 
-**swarm-insights** is the data aggregation layer that queries historical outcomes and semantic memory to provide context-efficient summaries for coordinator and worker agents.
+**swarm-insights** (`src/swarm-insights.ts`) is the data aggregation layer that queries historical outcomes and semantic memory to provide context-efficient summaries for coordinator and worker agents.
 
 **Three insight types:**
 
@@ -65,31 +92,104 @@ Swarms learn from outcomes. Every completed subtask records what worked and what
 | **FileInsight** | File-specific failure patterns and gotchas from past subtasks | Workers |
 | **PatternInsight** | Common failure patterns across all subtasks (type errors, timeouts, conflicts) | Coordinators |
 
-### How It Works
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATA FLOW                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐   │
+│  │   Event Store   │     │ Semantic Memory │     │  Anti-Patterns  │   │
+│  │  (libSQL)       │     │  (Ollama/FTS)   │     │  (Registry)     │   │
+│  └────────┬────────┘     └────────┬────────┘     └────────┬────────┘   │
+│           │                       │                       │            │
+│           ▼                       ▼                       ▼            │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    INSIGHTS AGGREGATION                         │   │
+│  │                                                                 │   │
+│  │  getStrategyInsights()  getFileInsights()  getPatternInsights() │   │
+│  │         │                      │                    │           │   │
+│  │         └──────────────────────┼────────────────────┘           │   │
+│  │                                ▼                                │   │
+│  │                    formatInsightsForPrompt()                    │   │
+│  │                    (token-budgeted output)                      │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                   │                                    │
+│           ┌───────────────────────┼───────────────────────┐            │
+│           ▼                       ▼                       ▼            │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐   │
+│  │   Coordinator   │     │     Worker      │     │     Worker      │   │
+│  │   (strategy +   │     │  (file-specific │     │  (file-specific │   │
+│  │    patterns)    │     │    gotchas)     │     │    gotchas)     │   │
+│  └─────────────────┘     └─────────────────┘     └─────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### API Reference
 
 **For coordinators** (strategy selection):
 ```typescript
-const insights = await getStrategyInsights(swarmMail, task);
+import { getStrategyInsights, getPatternInsights, formatInsightsForPrompt } from "opencode-swarm-plugin";
+
+const strategies = await getStrategyInsights(swarmMail, task);
+// Returns: [{ strategy: "file-based", successRate: 85.5, totalAttempts: 12, recommendation: "..." }]
+
 const patterns = await getPatternInsights(swarmMail);
-const summary = formatInsightsForPrompt({ strategies: insights, patterns }, { maxTokens: 500 });
+// Returns: [{ pattern: "type_error", frequency: 5, recommendation: "Add type annotations" }]
+
+const summary = formatInsightsForPrompt({ strategies, patterns }, { maxTokens: 500 });
 // Injected into decomposition prompt
 ```
 
 **For workers** (file-specific context):
 ```typescript
+import { getFileInsights, formatInsightsForPrompt } from "opencode-swarm-plugin";
+
 const fileInsights = await getFileInsights(swarmMail, ["src/auth.ts", "src/db.ts"]);
+// Returns: [{ file: "src/auth.ts", failureCount: 3, lastFailure: "2025-12-20T...", gotchas: [...] }]
+
 const summary = formatInsightsForPrompt({ files: fileInsights }, { maxTokens: 300 });
 // Injected into worker prompt
 ```
 
-**Token budgets:**
-- Coordinators: <500 tokens (strategy + pattern insights)
-- Workers: <300 tokens per file (file-specific gotchas)
+**Caching** (5-minute TTL):
+```typescript
+import { getCachedInsights, clearInsightsCache } from "opencode-swarm-plugin";
 
-**Data sources:**
-- Event store (subtask outcomes, eval results)
-- Semantic memory (file-specific learnings from past debugging)
-- Anti-pattern registry (patterns with >60% failure rate)
+const insights = await getCachedInsights(swarmMail, "strategies:auth-task", async () => ({
+  strategies: await getStrategyInsights(swarmMail, "add auth"),
+}));
+
+clearInsightsCache(); // Force fresh computation
+```
+
+### Token Budgets
+
+| Agent Type | Max Tokens | What's Included |
+|------------|------------|-----------------|
+| Coordinator | 500 | Top 3 strategies + top 3 patterns |
+| Worker | 300 | Top 5 files with gotchas |
+
+### Recommendation Thresholds
+
+Strategy success rates map to recommendations:
+
+| Success Rate | Recommendation |
+|--------------|----------------|
+| ≥80% | "performing well" |
+| 60-79% | "moderate - monitor for issues" |
+| 40-59% | "low success - consider alternatives" |
+| <40% | "AVOID - high failure rate" |
+
+### Data Sources
+
+| Source | What It Provides | Query Pattern |
+|--------|------------------|---------------|
+| Event Store | `subtask_outcome` events with strategy, success, files_touched, error_type | SQL aggregation |
+| Semantic Memory | File-specific learnings from past debugging | Semantic search (TODO) |
+| Anti-Pattern Registry | Patterns with >60% failure rate | Direct lookup |
 
 **See [swarmtools.ai/docs/insights](https://swarmtools.ai/docs) for full details.**
 
@@ -255,6 +355,7 @@ src/
 ├── swarm-mail.ts          # Agent coordination tools
 ├── swarm-orchestrate.ts   # Coordinator logic (spawns workers)
 ├── swarm-decompose.ts     # Task decomposition strategies
+├── swarm-insights.ts      # Historical insights aggregation (strategy/file/pattern)
 ├── swarm-review.ts        # Review gate for completed work
 ├── skills.ts              # Knowledge injection system
 ├── learning.ts            # Pattern maturity, outcomes
