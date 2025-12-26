@@ -360,6 +360,47 @@ describe("Beads Adapter", () => {
   });
 
   // ============================================================================
+  // Query Cells Tests
+  // ============================================================================
+
+  test("queryCells with parent_id returns only children", async () => {
+    // Create epic
+    const epic = await adapter.createCell(projectKey, { 
+      title: "Epic", 
+      type: "epic",
+      priority: 1
+    });
+    
+    // Create children
+    const child1 = await adapter.createCell(projectKey, { 
+      title: "Child 1", 
+      type: "task",
+      priority: 2,
+      parent_id: epic.id 
+    });
+    const child2 = await adapter.createCell(projectKey, { 
+      title: "Child 2", 
+      type: "task",
+      priority: 2,
+      parent_id: epic.id 
+    });
+    
+    // Create unrelated cell
+    await adapter.createCell(projectKey, { 
+      title: "Unrelated", 
+      type: "task",
+      priority: 2
+    });
+    
+    // Query by parent_id
+    const children = await adapter.queryCells(projectKey, { parent_id: epic.id });
+    
+    expect(children).toHaveLength(2);
+    expect(children.map(c => c.id)).toContain(child1.id);
+    expect(children.map(c => c.id)).toContain(child2.id);
+  });
+
+  // ============================================================================
   // Cell ID Generation Tests (TDD for project-name prefix)
   // ============================================================================
 

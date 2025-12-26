@@ -122,6 +122,7 @@ export const CellQueryArgsSchema = z.object({
   status: CellStatusSchema.optional(),
   type: CellTypeSchema.optional(),
   ready: z.boolean().optional(),
+  parent_id: z.string().optional(),
   limit: z.number().int().positive().default(20),
 });
 export type CellQueryArgs = z.infer<typeof CellQueryArgsSchema>;

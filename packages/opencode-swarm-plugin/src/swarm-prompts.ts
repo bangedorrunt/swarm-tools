@@ -1188,8 +1188,9 @@ export async function getPromptInsights(
  */
 async function getCoordinatorInsights(project_key?: string): Promise<string> {
   try {
-    // Import swarm-mail and analytics
-    const { createLibSQLAdapter, createSwarmMailAdapter, strategySuccessRates } = await import("swarm-mail");
+    // Import swarm-mail and swarm-insights modules
+    const { createLibSQLAdapter, createSwarmMailAdapter } = await import("swarm-mail");
+    const { getStrategyInsights, getPatternInsights, formatInsightsForPrompt } = await import("./swarm-insights.js");
     
     // Create libSQL database adapter
     const dbAdapter = await createLibSQLAdapter({ url: "file:./.swarm-mail/streams.db" });
@@ -1197,48 +1198,32 @@ async function getCoordinatorInsights(project_key?: string): Promise<string> {
     // Create swarm-mail adapter with database
     const adapter = createSwarmMailAdapter(dbAdapter, project_key || "default");
     
-    // Get database for raw queries
-    const db = await adapter.getDatabase();
+    // Query insights from the new data layer
+    const [strategies, patterns] = await Promise.all([
+      getStrategyInsights(adapter, ""),
+      getPatternInsights(adapter),
+    ]);
     
-    // Query strategy success rates
-    const query = strategySuccessRates({ project_key });
-    const result = await db.query(query.sql, Object.values(query.parameters || {}));
+    // Bundle insights
+    const bundle = {
+      strategies,
+      patterns,
+    };
     
-    if (!result || !result.rows || result.rows.length === 0) {
+    // Format for prompt injection (<500 tokens)
+    const formatted = formatInsightsForPrompt(bundle, { maxTokens: 500 });
+    
+    if (!formatted) {
       return "";
     }
     
-    // Format as markdown table
-    const rows = result.rows.map((r: any) => {
-      const strategy = r.strategy || "unknown";
-      const total = r.total_attempts || 0;
-      const successRate = r.success_rate || 0;
-      const emoji = successRate >= 80 ? "✅" : successRate >= 60 ? "⚠️" : "❌";
-      
-      return `| ${emoji} ${strategy} | ${successRate.toFixed(1)}% | ${total} |`;
-    });
-    
-    // Limit to top 5 strategies to prevent context bloat
-    const topRows = rows.slice(0, 5);
-    
-    // Add anti-pattern hints for low-success strategies
-    const antiPatterns = result.rows
-      .filter((r: any) => r.success_rate < 60)
-      .map((r: any) => `- AVOID: ${r.strategy} strategy (${r.success_rate.toFixed(1)}% success rate)`)
-      .slice(0, 3);
-    
-    const antiPatternsSection = antiPatterns.length > 0
-      ? `\n\n**Anti-Patterns:**\n${antiPatterns.join("\n")}`
-      : "";
-    
+    // Add section header
     return `
-## 📊 Swarm Insights (Strategy Success Rates)
+## 📊 Historical Insights
 
-| Strategy | Success Rate | Total Attempts |
-|----------|--------------|----------------|
-${topRows.join("\n")}
+${formatted}
 
-**Use these insights to select decomposition strategies.**${antiPatternsSection}
+**Use these learnings when selecting decomposition strategies and planning subtasks.**
 `;
   } catch (e) {
     console.warn("Failed to get coordinator insights:", e);
@@ -1254,7 +1239,10 @@ async function getWorkerInsights(
   domain?: string,
 ): Promise<string> {
   try {
-    const adapter = await getMemoryAdapter();
+    // Import swarm-mail and swarm-insights modules
+    const { createLibSQLAdapter, createSwarmMailAdapter } = await import("swarm-mail");
+    const { getFileInsights, formatInsightsForPrompt } = await import("./swarm-insights.js");
+    const memoryAdapter = await getMemoryAdapter();
     
     // Build query from files and domain
     let query = "";
@@ -1270,31 +1258,61 @@ async function getWorkerInsights(
       return ""; // No context to query
     }
     
-    // Query semantic memory for relevant learnings
-    const result = await adapter.find({
-      query: `${query} gotcha pitfall pattern bug`,
-      limit: 3,
-    });
+    // Query BOTH event store (via swarm-insights) AND semantic memory
+    const [fileInsights, memoryResult] = await Promise.all([
+      // Get file-specific insights from event store
+      (async () => {
+        if (!files || files.length === 0) return [];
+        try {
+          const dbAdapter = await createLibSQLAdapter({ url: "file:./.swarm-mail/streams.db" });
+          const swarmMail = createSwarmMailAdapter(dbAdapter, "default");
+          return await getFileInsights(swarmMail, files);
+        } catch (e) {
+          console.warn("Failed to get file insights from event store:", e);
+          return [];
+        }
+      })(),
+      
+      // Get domain/file learnings from semantic memory
+      memoryAdapter.find({
+        query: `${query} gotcha pitfall pattern bug`,
+        limit: 3,
+      }),
+    ]);
     
-    if (result.count === 0) {
-      return "";
-    }
+    // Bundle insights for formatting
+    const bundle = {
+      files: fileInsights,
+    };
     
-    // Format as bullet list
-    const learnings = result.results.map((r) => {
-      const content = r.content.length > 150
-        ? r.content.slice(0, 150) + "..."
-        : r.content;
-      return `- ${content}`;
-    });
+    // Format file insights using swarm-insights formatter
+    const formattedFileInsights = formatInsightsForPrompt(bundle, { maxTokens: 300 });
     
-    return `
-## 💡 Relevant Learnings (from past agents)
+    // Format semantic memory learnings
+    let formattedMemory = "";
+    if (memoryResult.count > 0) {
+      const learnings = memoryResult.results.map((r) => {
+        const content = r.content.length > 150
+          ? r.content.slice(0, 150) + "..."
+          : r.content;
+        return `- ${content}`;
+      });
+      
+      formattedMemory = `## 💡 Relevant Learnings (from past agents)
 
 ${learnings.join("\n")}
 
-**Check semantic-memory for full details if needed.**
-`;
+**Check semantic-memory for full details if needed.**`;
+    }
+    
+    // Combine both sources
+    const sections = [formattedFileInsights, formattedMemory].filter(s => s.length > 0);
+    
+    if (sections.length === 0) {
+      return "";
+    }
+    
+    return sections.join("\n\n");
   } catch (e) {
     console.warn("Failed to get worker insights:", e);
     return "";

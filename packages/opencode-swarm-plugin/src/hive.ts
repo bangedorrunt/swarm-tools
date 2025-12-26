@@ -873,6 +873,10 @@ export const hive_query = tool({
       .boolean()
       .optional()
       .describe("Only show unblocked cells"),
+    parent_id: tool.schema
+      .string()
+      .optional()
+      .describe("Filter by parent epic ID (returns children of an epic)"),
     limit: tool.schema
       .number()
       .optional()
@@ -893,6 +897,7 @@ export const hive_query = tool({
         cells = await adapter.queryCells(projectKey, {
           status: validated.status,
           type: validated.type,
+          parent_id: validated.parent_id,
           limit: validated.limit || 20,
         });
       }
@@ -1139,6 +1144,7 @@ USE THIS TOOL TO:
 - Find cells by type: hive_cells({ type: "bug" })
 - Get a specific cell by partial ID: hive_cells({ id: "mjkmd" })
 - Get the next ready (unblocked) cell: hive_cells({ ready: true })
+- Get children of an epic: hive_cells({ parent_id: "epic-id" })
 - Combine filters: hive_cells({ status: "open", type: "task" })
 
 RETURNS: Array of cells with id, title, status, priority, type, parent_id, created_at, updated_at
@@ -1152,6 +1158,7 @@ PREFER THIS OVER hive_query when you need to:
     id: tool.schema.string().optional().describe("Partial or full cell ID to look up"),
     status: tool.schema.enum(["open", "in_progress", "blocked", "closed"]).optional().describe("Filter by status"),
     type: tool.schema.enum(["task", "bug", "feature", "epic", "chore"]).optional().describe("Filter by type"),
+    parent_id: tool.schema.string().optional().describe("Filter by parent epic ID (returns children of an epic)"),
     ready: tool.schema.boolean().optional().describe("If true, return only the next unblocked cell"),
     limit: tool.schema.number().optional().describe("Max cells to return (default 20)"),
   },
@@ -1185,6 +1192,7 @@ PREFER THIS OVER hive_query when you need to:
       const cells = await adapter.queryCells(projectKey, {
         status: args.status,
         type: args.type,
+        parent_id: args.parent_id,
         limit: args.limit || 20,
       });
       

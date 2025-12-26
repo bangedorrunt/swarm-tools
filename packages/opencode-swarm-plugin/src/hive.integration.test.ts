@@ -17,6 +17,7 @@ import {
   hive_close,
   hive_start,
   hive_ready,
+  hive_cells,
   hive_link_thread,
   hive_sync,
   HiveError,
@@ -2127,6 +2128,110 @@ describe("beads integration", () => {
         // Verify closed_at is valid
         const closedDate = new Date(cell!.closed_at!);
         expect(closedDate.getTime()).toBeGreaterThan(0);
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("parent_id filter", () => {
+    it("hive_query filters by parent_id to get epic children", async () => {
+      const { rmSync } = await import("node:fs");
+      const tempProject = join(tmpdir(), `hive-parent-filter-${Date.now()}`);
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create an epic
+        const epicResponse = await hive_create.execute(
+          { title: "Epic Task", type: "epic", priority: 1 },
+          mockContext
+        );
+        const epic = parseResponse<Cell>(epicResponse);
+
+        // Create children of the epic
+        const child1Response = await hive_create.execute(
+          { title: "Subtask 1", type: "task", parent_id: epic.id },
+          mockContext
+        );
+        const child1 = parseResponse<Cell>(child1Response);
+
+        const child2Response = await hive_create.execute(
+          { title: "Subtask 2", type: "task", parent_id: epic.id },
+          mockContext
+        );
+        const child2 = parseResponse<Cell>(child2Response);
+
+        // Create unrelated cell
+        await hive_create.execute(
+          { title: "Unrelated Task", type: "task" },
+          mockContext
+        );
+
+        // Query by parent_id
+        const queryResponse = await hive_query.execute(
+          { parent_id: epic.id },
+          mockContext
+        );
+        const children = parseResponse<Cell[]>(queryResponse);
+
+        // Should only return the 2 children
+        expect(children).toHaveLength(2);
+        expect(children.map(c => c.id)).toContain(child1.id);
+        expect(children.map(c => c.id)).toContain(child2.id);
+        expect(children.every(c => c.parent_id === epic.id)).toBe(true);
+      } finally {
+        setHiveWorkingDirectory(originalDir);
+        rmSync(tempProject, { recursive: true, force: true });
+      }
+    });
+
+    it("hive_cells filters by parent_id to get epic children", async () => {
+      const { rmSync } = await import("node:fs");
+      const tempProject = join(tmpdir(), `hive-cells-parent-filter-${Date.now()}`);
+      const originalDir = getHiveWorkingDirectory();
+      setHiveWorkingDirectory(tempProject);
+
+      try {
+        // Create an epic
+        const epicResponse = await hive_create.execute(
+          { title: "Epic with Children", type: "epic", priority: 1 },
+          mockContext
+        );
+        const epic = parseResponse<Cell>(epicResponse);
+
+        // Create children
+        const child1Response = await hive_create.execute(
+          { title: "Child A", type: "task", parent_id: epic.id },
+          mockContext
+        );
+        const child1 = parseResponse<Cell>(child1Response);
+
+        const child2Response = await hive_create.execute(
+          { title: "Child B", type: "bug", parent_id: epic.id },
+          mockContext
+        );
+        const child2 = parseResponse<Cell>(child2Response);
+
+        // Create unrelated cells
+        await hive_create.execute(
+          { title: "Orphan Task", type: "task" },
+          mockContext
+        );
+
+        // Query using hive_cells with parent_id
+        const cellsResponse = await hive_cells.execute(
+          { parent_id: epic.id },
+          mockContext
+        );
+        const cells = parseResponse<Cell[]>(cellsResponse);
+
+        // Should only return the 2 children
+        expect(cells).toHaveLength(2);
+        expect(cells.map(c => c.id)).toContain(child1.id);
+        expect(cells.map(c => c.id)).toContain(child2.id);
+        expect(cells.every(c => c.parent_id === epic.id)).toBe(true);
       } finally {
         setHiveWorkingDirectory(originalDir);
         rmSync(tempProject, { recursive: true, force: true });

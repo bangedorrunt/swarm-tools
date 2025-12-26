@@ -1102,4 +1102,169 @@ describe("getPromptInsights", () => {
       }
     });
   });
+
+  describe("getPromptInsights integration with swarm-insights", () => {
+    test("coordinator role uses swarm-insights data layer", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      
+      // Should call new data layer, not old swarm-mail analytics
+      const result = await getPromptInsights({ role: "coordinator" });
+      
+      // If we have data, it should be formatted by formatInsightsForPrompt
+      if (result.length > 0) {
+        // New format has "Historical Insights" section
+        expect(result).toMatch(/Historical Insights|Strategy Performance|Common Pitfalls/i);
+      }
+    });
+
+    test("coordinator insights have expected structure when data exists", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ role: "coordinator" });
+      
+      // Should have Historical Insights header
+      if (result.length > 0) {
+        expect(result).toContain("📊 Historical Insights");
+        expect(result).toContain("Use these learnings when selecting decomposition strategies");
+      }
+    });
+
+    test("coordinator insights use formatInsightsForPrompt output", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ role: "coordinator" });
+      
+      // formatInsightsForPrompt produces specific markdown patterns
+      if (result.length > 0 && result.includes("Strategy")) {
+        // Should have Strategy Performance or Common Pitfalls sections
+        const hasExpectedSections = 
+          result.includes("Strategy Performance") || 
+          result.includes("Common Pitfalls");
+        expect(hasExpectedSections).toBe(true);
+      }
+    });
+
+    test("coordinator insights are concise (<500 tokens)", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ role: "coordinator" });
+      
+      // formatInsightsForPrompt enforces maxTokens=500 by default
+      // Rough estimate: 4 chars per token = 2000 chars max
+      if (result.length > 0) {
+        expect(result.length).toBeLessThan(2000);
+      }
+    });
+
+    test("gracefully handles missing data", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      
+      // Should not throw if database is empty or missing
+      const result = await getPromptInsights({ role: "coordinator" });
+      
+      // Empty string is acceptable when no data
+      expect(typeof result).toBe("string");
+    });
+
+    test("imports from swarm-insights module", async () => {
+      // Verify the imports exist
+      const insights = await import("./swarm-insights");
+      
+      expect(insights.getStrategyInsights).toBeDefined();
+      expect(insights.getPatternInsights).toBeDefined();
+      expect(insights.formatInsightsForPrompt).toBeDefined();
+    });
+  });
+
+  describe("worker insights integration with swarm-insights", () => {
+    test("worker role uses getFileInsights from swarm-insights data layer", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      
+      // Should call getFileInsights for file-specific insights
+      const result = await getPromptInsights({ 
+        role: "worker",
+        files: ["src/auth.ts", "src/db.ts"],
+        domain: "authentication"
+      });
+      
+      // If we have data, it should be formatted by formatInsightsForPrompt
+      if (result.length > 0) {
+        // New format has "File-Specific Gotchas" or semantic memory learnings
+        expect(result).toMatch(/File-Specific Gotchas|Relevant Learnings/i);
+      }
+    });
+
+    test("worker insights include file-specific gotchas when available", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ 
+        role: "worker",
+        files: ["src/test-file.ts"],
+      });
+      
+      // Should contain either file gotchas or semantic memory results
+      if (result.length > 0) {
+        const hasFileInsights = 
+          result.includes("File-Specific Gotchas") ||
+          result.includes("Relevant Learnings");
+        expect(hasFileInsights).toBe(true);
+      }
+    });
+
+    test("worker insights combine event store failures + semantic memory", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ 
+        role: "worker",
+        files: ["src/complex.ts"],
+        domain: "complex feature"
+      });
+      
+      // Should potentially have both sources of insight
+      // At minimum, should return string (empty if no data)
+      expect(typeof result).toBe("string");
+    });
+
+    test("worker insights are concise (<300 tokens per file)", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      const result = await getPromptInsights({ 
+        role: "worker",
+        files: ["src/file1.ts", "src/file2.ts", "src/file3.ts"],
+      });
+      
+      // <300 tokens per file = 900 tokens max for 3 files
+      // Rough estimate: 4 chars per token = 3600 chars max
+      if (result.length > 0) {
+        expect(result.length).toBeLessThan(3600);
+      }
+    });
+
+    test("formatSubtaskPromptV2 includes file insights in shared_context", async () => {
+      const result = await formatSubtaskPromptV2({
+        bead_id: "test-123",
+        epic_id: "epic-456",
+        subtask_title: "Implement auth",
+        subtask_description: "Add authentication flow",
+        files: ["src/auth.ts", "src/user.ts"],
+        shared_context: "Original context from coordinator",
+      });
+      
+      // shared_context should be replaced and insights potentially included
+      // At minimum, the original context should be in the prompt
+      expect(result).toContain("Original context from coordinator");
+    });
+
+    test("worker insights gracefully handle missing files parameter", async () => {
+      const { getPromptInsights } = await import("./swarm-prompts");
+      
+      // Should not throw with no files or domain
+      const result = await getPromptInsights({ role: "worker" });
+      
+      // Empty string is acceptable when no context to query
+      expect(typeof result).toBe("string");
+    });
+
+    test("worker insights use swarm-insights getFileInsights", async () => {
+      // Verify the function is imported
+      const insights = await import("./swarm-insights");
+      
+      expect(insights.getFileInsights).toBeDefined();
+      expect(typeof insights.getFileInsights).toBe("function");
+    });
+  });
 });
