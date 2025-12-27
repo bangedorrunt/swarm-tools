@@ -79,7 +79,7 @@ export const CellsPane = ({ events, onCellSelect }: CellsPaneProps) => {
     for (const event of cellStatusChanged) {
       const cell = cellMap.get(event.cell_id);
       if (cell) {
-        cell.status = event.new_status as Cell['status'];
+        cell.status = event.to_status as Cell['status'];
       }
     }
 
